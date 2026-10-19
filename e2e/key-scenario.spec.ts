@@ -71,7 +71,7 @@ test("key scenario on a prepared example in the user's profile", async ({ page }
   // Ask a question and get a demo answer with sources and used context.
   await page.getByRole("link", { name: "Чат", exact: true }).click();
   await page.getByRole("button", { name: "Какие препараты мне назначали?" }).click();
-  await expect(page.getByText("Демонстрационный ответ: LLM не подключена")).toBeVisible();
+  await expect(page.getByText("Ответ по шаблону, без модели")).toBeVisible();
   await expect(page.getByText(/Омепразол, дозировка не указана: назначен врачом, приём не подтверждён/)).toBeVisible();
   await expect(page.getByText(/не означают, что препарат нужно принимать сейчас/)).toBeVisible();
   await page.getByText(/Какой контекст учтён/).click();

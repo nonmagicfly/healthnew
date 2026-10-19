@@ -12,7 +12,7 @@ import { api, postJson, useApi } from "./api";
 import { FactEditor } from "./fact-editor";
 import type { FactAction } from "@/core/service";
 import { useProfile } from "./profile";
-import { Badge, Card, DemoBadge, DOC_KIND_LABEL, Empty, ErrorState, formatIso, Loading, STATUS_LABEL } from "./common";
+import { Badge, Card, DemoBadge, DOC_KIND_LABEL, Empty, ErrorState, formatDateTime, formatIso, Loading, STATUS_LABEL } from "./common";
 
 interface Detail {
   document: SourceDocument;
@@ -394,6 +394,7 @@ export function DocumentDetailView() {
         <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-600">
           <span>{DOC_KIND_LABEL[d.kind]}</span>
           <DocumentDate doc={d} onSaved={bump} />
+          <span>Загружен: {formatDateTime(d.createdAt)}</span>
           {d.specialist && <span>{d.specialist}</span>}
           <Badge tone={st.tone}>{st.text}</Badge>
           {d.isSynthetic && <DemoBadge>Синтетический документ</DemoBadge>}

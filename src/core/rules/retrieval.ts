@@ -1,7 +1,8 @@
 import type { Fact } from "../model";
 import { indicatorOf, INDICATORS, qualitativeIndicatorOf } from "../indicators";
+import { referenceFlag } from "./lab-values";
 
-export type Topic = "medication" | "indicator" | "complaint" | "allergy" | "visits";
+export type Topic = "medication" | "indicator" | "complaint" | "allergy" | "visits" | "abnormal";
 
 export interface Retrieval {
   topics: Topic[];
@@ -10,6 +11,7 @@ export interface Retrieval {
 }
 
 const TOPIC_WORDS: Record<Exclude<Topic, "indicator">, RegExp> = {
+  abnormal: /(отклон|вне норм|не в норм|выше норм|ниже норм|вне референс|повышен|понижен|превыш)/i,
   medication: /(препарат|лекарств|назнач|принима|принять|таблет|статин|доз)/i,
   complaint: /(жалоб|симптом|беспоко|вздут|живот|газообраз|тяжест|дискомфорт|болит|боль)/i,
   allergy: /аллерг/i,
@@ -50,6 +52,7 @@ export function retrieveFacts(question: string, allFacts: Fact[]): Retrieval {
     if (topics.includes("medication") && f.type === "medication") add(f, "Вопрос о препаратах");
     if (topics.includes("complaint") && (f.type === "complaint" || f.type === "note")) add(f, "Вопрос о жалобах");
     if (topics.includes("allergy") && f.type === "allergy") add(f, "Вопрос об аллергиях");
+    if (topics.includes("abnormal") && outOfReference(f)) add(f, "Значение вне референса лаборатории");
     if (topics.includes("visits") && (f.type === "appointment" || f.type === "examination" || f.type === "diagnosis" || f.type === "condition"))
       add(f, "Вопрос о визитах и обследованиях");
     const ind = f.value.kind === "lab_result" ? indicatorOf(f.value) : f.value.kind === "qualitative" ? qualitativeIndicatorOf(f.value.indicator) : null;
@@ -75,4 +78,11 @@ export function retrieveFacts(question: string, allFacts: Fact[]): Retrieval {
   }
 
   return { topics, indicators: [...new Set(indicators)], facts: [...picked.values()] };
+}
+
+/** A lab-form result outside the lab's own reference range. */
+export function outOfReference(f: Fact): "high" | "low" | null {
+  if (f.value.kind !== "lab_result" || f.value.origin !== "lab_report") return null;
+  const flag = referenceFlag(f.value.value, f.value.reference);
+  return flag === "high" || flag === "low" ? flag : null;
 }

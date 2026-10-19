@@ -27,7 +27,7 @@ function Answer({ m }: { m: ChatMessage }) {
     <div className="space-y-2">
       <div className="flex items-center gap-2">
         <span className="text-sm font-semibold text-slate-800">Ответ</span>
-        {m.mode === "demo" && <DemoBadge>Демонстрационный ответ: LLM не подключена</DemoBadge>}
+        {m.mode === "demo" && <DemoBadge>Ответ по шаблону, без модели</DemoBadge>}
         {m.mode === "llm" && <Badge tone="blue">Ответ модели; ссылки проверены по вашим фактам</Badge>}
       </div>
       <ul className="space-y-1.5">

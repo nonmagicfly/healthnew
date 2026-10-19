@@ -3,6 +3,7 @@ import type { LlmAdapter, LlmAnswer, LlmRequest } from "@/core/ports";
 import { formatDateValue, formatIsoRu } from "@/core/rules/dates";
 import { MEDICATION_STATUS_LABEL } from "@/core/rules/facts";
 import { indicatorByCode } from "@/core/indicators";
+import { outOfReference } from "@/core/rules/retrieval";
 
 /**
  * DEMO adapter: no language model is called. The answer is assembled from templates
@@ -57,7 +58,9 @@ export class DemoLlm implements LlmAdapter {
       for (const f of forms) {
         if (f.value.kind !== "lab_result") continue;
         const v = f.value;
-        push("document_fact", `${name}: ${v.value.raw}${v.unit ? ` ${v.unit}` : ""}${v.reference ? `, референс лаборатории ${v.reference.raw}` : ""}; дата забора: ${formatDateValue(f.eventDate)}; ${docDate(f)}.`, [f]);
+        const flag = outOfReference(f);
+        const flagText = flag === "high" ? " (выше референса)" : flag === "low" ? " (ниже референса)" : "";
+        push("document_fact", `${name}: ${v.value.raw}${v.unit ? ` ${v.unit}` : ""}${flagText}${v.reference ? `, референс лаборатории ${v.reference.raw}` : ""}; дата забора: ${formatDateValue(f.eventDate)}; ${docDate(f)}.`, [f]);
       }
       for (const f of mentions) {
         if (f.value.kind !== "lab_result") continue;
@@ -92,6 +95,13 @@ export class DemoLlm implements LlmAdapter {
             ? "не актуально"
             : `из документа, актуальность не подтверждена (${docDate(f)})`;
       push(whose(f), `${f.label}: ${status}.`, [f]);
+    }
+
+    const asksAbnormal = /(отклон|вне норм|не в норм|выше норм|ниже норм|вне референс|повышен|понижен|превыш)/.test(q);
+    if (asksAbnormal && labs.some((f) => outOfReference(f))) {
+      push("caution", "Выход за референс лаборатории сам по себе не диагноз. Значения стоит обсудить с врачом вместе с остальными данными.");
+    } else if (asksAbnormal && facts.length) {
+      push("missing", "Значений вне референса лаборатории в ваших бланках не найдено.");
     }
 
     if (/аллерг/.test(q)) {

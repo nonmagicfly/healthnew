@@ -111,6 +111,13 @@ export const STATUS_LABEL: Record<string, { text: string; tone: "slate" | "green
   error: { text: "Ошибка", tone: "red" },
 };
 
+/** Upload time in the viewer's local time zone: "19.10.2026, 10:05". */
+export function formatDateTime(at: string) {
+  const d = new Date(at);
+  if (Number.isNaN(d.getTime())) return at;
+  return d.toLocaleString("ru-RU", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
 export function formatIso(d: string | null) {
   return d ? d.slice(0, 10).split("-").reverse().join(".") : "не указана";
 }

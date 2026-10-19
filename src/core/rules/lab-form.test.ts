@@ -80,4 +80,24 @@ describe("lab form parser", () => {
     const p2 = (await service.getDocument("me", other.document.id)).proposal!;
     expect(p2.items[0]).toMatchObject({ group: "clarify", draft: { label: expect.stringContaining("ДРУГОВА") } });
   });
+
+  it("fills missing dates when a form is uploaded again, and answers which values are out of range", async () => {
+    const { service, repo } = await createTestService();
+    const bytes = new TextEncoder().encode(FORM("ТЕСТОВ", "01.03.2026").join("\n"));
+    const { document } = await service.upload("me", { fileName: "бланк.txt", mime: "text/plain", bytes, kind: "lab_report" });
+    await service.applyProposal("me", document.id, { acceptedStateChanges: [], postponedClarifications: [] });
+    // Facts saved by an earlier extraction that found no date.
+    for (const f of await repo.listFacts("me")) await repo.saveFact({ ...f, eventDate: { kind: "unknown" }, documentDate: null });
+    await repo.saveDocument({ ...(await repo.getDocument("me", document.id))!, documentDate: null });
+
+    const again = await service.upload("me", { fileName: "бланк.txt", mime: "text/plain", bytes });
+    expect(again).toMatchObject({ duplicate: true, document: { documentDate: "2026-03-01" } });
+    const iron = (await repo.listFacts("me")).find((f) => f.label.startsWith("Железо"))!;
+    expect(iron).toMatchObject({ eventDate: { kind: "exact", date: "2026-03-01" }, documentDate: "2026-03-01" });
+
+    const [, answer] = (await service.ask("me", "Какие отклонения в анализах?")).slice(-2);
+    const text = answer.segments.map((s) => s.text).join("\n");
+    expect(text).toContain("Железо сывороточное: 24.1 мкмоль/л (выше референса)");
+    expect(text).not.toContain("Гемоглобин");
+  });
 });

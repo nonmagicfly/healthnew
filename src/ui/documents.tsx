@@ -7,7 +7,7 @@ import { ensureFileChosen, FilePicker } from "./file-picker";
 import type { SourceDocument } from "@/core/model";
 import { api } from "./api";
 import { useProfile } from "./profile";
-import { Badge, Card, DemoBadge, DOC_KIND_LABEL, Empty, formatIso, STATUS_LABEL } from "./common";
+import { Badge, Card, DemoBadge, DOC_KIND_LABEL, Empty, formatDateTime, formatIso, STATUS_LABEL } from "./common";
 
 function Samples() {
   const { samples, profile, base, bump } = useProfile();
@@ -293,6 +293,7 @@ export function DocumentsView() {
                 <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-slate-600">
                   <span>{DOC_KIND_LABEL[d.kind]}</span>
                   <span>Дата документа: {formatIso(d.documentDate)}</span>
+                  <span>Загружен: {formatDateTime(d.createdAt)}</span>
                   {d.specialist && <span>{d.specialist}</span>}
                   <Badge tone={STATUS_LABEL[d.status].tone}>{STATUS_LABEL[d.status].text}</Badge>
                   {d.sampleKey && <DemoBadge>{d.isSynthetic ? "Синтетический" : "Подготовленный разбор"}</DemoBadge>}

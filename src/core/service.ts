@@ -207,7 +207,7 @@ export class HealthService {
 
     const sha256 = await sha256Hex(input.bytes);
     const existing = (await this.d.repo.listDocuments(profileId)).find((d) => d.original?.sha256 === sha256);
-    if (existing) return { document: existing, duplicate: true };
+    if (existing) return { document: await this.fillFormDates(existing), duplicate: true };
 
     await this.d.files.put(sha256, input.bytes);
     const kind = input.kind ?? (mime === "application/pdf" ? "other" : "transcript");
@@ -394,6 +394,28 @@ export class HealthService {
       });
     }
     return proposal;
+  }
+
+  /**
+   * A lab form uploaded again fills the dates its facts are missing from the date printed in the form.
+   * Only empty dates are filled, and never on facts the user corrected; values are not touched.
+   */
+  private async fillFormDates(doc: SourceDocument): Promise<SourceDocument> {
+    if (doc.sampleKey || doc.status !== "applied") return doc;
+    const proposal = await this.labFormProposal(doc, await this.d.repo.listVersions(doc.profileId, doc.id));
+    const date = proposal?.documentDate;
+    if (!date) return doc;
+    const at = this.now();
+    for (const f of await this.d.repo.listFacts(doc.profileId)) {
+      if (!f.sources.some((s) => s.documentId === doc.id)) continue;
+      const eventDate = f.type === "lab_result" ? ({ kind: "exact", date } as const) : ({ kind: "unknown" } as const);
+      const next = fillMissingDates(f, eventDate, date, at);
+      if (next !== f) await this.d.repo.saveFact(next);
+    }
+    if (doc.documentDate) return doc;
+    const updated: SourceDocument = { ...doc, documentDate: date };
+    await this.d.repo.saveDocument(updated);
+    return updated;
   }
 
   /** Parses an already uploaded document with the local lab-form parser. */
