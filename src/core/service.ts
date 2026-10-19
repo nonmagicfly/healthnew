@@ -472,7 +472,10 @@ export class HealthService {
 
     for (const f of touched.values()) await this.d.repo.saveFact(f);
     await this.linkMentions(profileId, at);
-    const updated: SourceDocument = { ...doc, status: "applied", statusMessage: null, encounterId, documentDate: doc.documentDate ?? proposal.documentDate ?? null };
+    // A document uploaded as "other" takes its kind from the event it records.
+    const ENC_KIND = { visit: "consultation", lab: "lab_report", examination: "examination" } as const;
+    const kind = doc.kind === "other" && proposal.encounter ? ENC_KIND[proposal.encounter.kind] : doc.kind;
+    const updated: SourceDocument = { ...doc, kind, status: "applied", statusMessage: null, encounterId, documentDate: doc.documentDate ?? proposal.documentDate ?? null };
     await this.d.repo.saveDocument(updated);
     return this.getDocument(profileId, documentId);
   }
@@ -614,7 +617,7 @@ export class HealthService {
   // ---------- Derived views ----------
 
   async state(profileId: string) {
-    return buildState(await this.listFacts(profileId));
+    return buildState(await this.listFacts(profileId), this.now().slice(0, 10));
   }
 
   async indicators(profileId: string) {
@@ -634,7 +637,7 @@ export class HealthService {
       this.d.repo.listDocuments(profileId),
       this.d.repo.listEncounters(profileId),
     ]);
-    return groupTimeline(buildTimeline(facts, docs, encs), groupBy);
+    return groupTimeline(buildTimeline(facts, docs, encs, this.now().slice(0, 10)), groupBy);
   }
 
   // ---------- Chat ----------
@@ -651,7 +654,7 @@ export class HealthService {
     if (!q) throw new ValidationError("Вопрос пустой");
     if (opts.useModel && !this.d.live) throw new ValidationError("Модель не подключена: укажите ключ API в .env.local.");
     const facts = await this.d.repo.listFacts(profileId);
-    const state = buildState(facts);
+    const state = buildState(facts, this.now().slice(0, 10));
     const retrieval = retrieveFacts(q, facts);
     const request = buildLlmRequest(q, retrieval.facts.map((r) => r.fact), stateToText(state));
     let answer;

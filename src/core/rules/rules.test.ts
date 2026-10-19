@@ -142,6 +142,25 @@ describe("state", () => {
     expect(s.takingMedications).toHaveLength(0);
     expect(s.otherMedications[0].detail).toMatch(/приём не подтверждён/);
   });
+
+  it("shows a medicine once across documents and points out a later cancellation", () => {
+    const med = (id: string, doc: string, status: "prescribed" | "stopped" | "taking_now", date: string) =>
+      fact({ id, type: "medication", label: "Лозартан 50 мг", value: { kind: "medication", name: "Лозартан", dose: "50 мг", status }, documentDate: date, sources: [{ ...fact({ type: "note", value: { kind: "text", text: "" } }).sources[0], documentId: doc }] });
+    const taking = setMedicationStatus(med("a", "d1", "prescribed", "2026-01-10"), "taking_now", "2026-01-12T00:00:00Z");
+    const s = buildState([taking, med("b", "d2", "prescribed", "2026-02-01"), med("c", "d3", "stopped", "2026-03-01")]);
+    expect(s.takingMedications).toHaveLength(1);
+    expect(s.takingMedications[0].documentIds).toEqual(["d1", "d2", "d3"]);
+    expect(s.takingMedications[0].detail).toMatch(/отмечена отмена/);
+    expect(s.otherMedications).toHaveLength(0);
+    // Prescribed and later stopped, never confirmed: not listed at all.
+    expect(buildState([med("x", "d1", "prescribed", "2026-01-10"), med("y", "d2", "stopped", "2026-03-01")]).otherMedications).toHaveLength(0);
+  });
+
+  it("a future appointment is planned, not an unconfirmed visit", () => {
+    const appt = fact({ type: "appointment", label: "Явка к кардиологу", value: { kind: "appointment", attended: "unknown" }, eventDate: { kind: "exact", date: "2026-12-02" } });
+    expect(buildState([appt], "2026-10-19").openQuestions[0].detail).toBe("Запланировано");
+    expect(buildState([appt], "2027-01-01").openQuestions[0].detail).toBe("Посещение не подтверждено");
+  });
 });
 
 describe("series", () => {

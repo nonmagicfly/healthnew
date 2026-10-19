@@ -21,10 +21,13 @@ export function unescapeModelText(s: string): string {
   return s.replace(/‹/g, "<").replace(/›/g, ">");
 }
 
+const VERIFICATION_RU: Record<Fact["verification"], string> = { unverified: "не проверено", confirmed: "подтверждено человеком", corrected: "исправлено человеком", rejected: "отклонено" };
+const VALIDITY_RU: Record<Fact["validity"]["status"], string> = { current: "актуально", unconfirmed: "актуальность не подтверждена", historical: "в прошлом", ended: "завершено", unknown: "неизвестно" };
+
 function factLine(f: Fact): string {
   const src = f.sources[0];
   const speaker = src?.speaker ? `; говорит: ${src.speaker}` : "";
-  return `[F:${f.id}] ${f.type}; ${escapeUntrusted(f.label)}; дата события: ${formatDateValue(f.eventDate)}; дата документа: ${f.documentDate ?? "неизвестна"}; проверка: ${f.verification}; актуальность: ${f.validity.status}${speaker}; цитата: «${escapeUntrusted(f.originalText)}»`;
+  return `[F:${f.id}] ${f.type}; ${escapeUntrusted(f.label)}; дата события: ${formatDateValue(f.eventDate)}; дата документа: ${f.documentDate ?? "неизвестна"}; проверка: ${VERIFICATION_RU[f.verification]}; актуальность: ${VALIDITY_RU[f.validity.status]}${speaker}; цитата: «${escapeUntrusted(f.originalText)}»`;
 }
 
 /**
@@ -58,7 +61,8 @@ export const EXTRACTION_INSTRUCTIONS = `Ты извлекаешь структу
 - Повтор одного назначения в документе — один факт.
 - Анализы: каждый показатель отдельно, значение как записано (включая «<0,5», «около 400», «отрицательно»), единицы, референс и метод как в документе. origin "lab_report" для бланка анализа, "mention" для числа, упомянутого в консультации или разговоре. Не объединяй несопоставимые единицы.
 - Фразы без чисел («АЛТ немного повышена») — тип qualitative_finding, а не lab_result.
-- Жалобы и состояние из документа относятся к дате документа. proposeCurrent=true только если документ указывает на текущее положение; окончательно решает человек.
+- Жалобы и состояние из документа относятся к дате документа. proposeCurrent=true только если документ указывает на текущее положение; для препаратов только при статусе "mentioned_taking". Окончательно решает человек.
+- label для анализа: «Название значение единицы», например «Гемоглобин 128 г/л»; название показателя в lab.name без значения.
 - Отсутствие сведений об аллергиях не означает их отсутствие: не создавай факт «аллергий нет», если это не написано прямо.
 - Если что-то неясно или противоречиво, добавь пункт type "clarification" с вопросом человеку в label и номерами связанных пунктов в aboutItems.
 - В расшифровке разговора различай слова врача и пациента; варианты лечения, которые только обсуждались, не являются назначениями.

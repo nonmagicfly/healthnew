@@ -3,7 +3,7 @@ import { formatDateValue, formatIsoRu, sortableDate } from "./dates";
 
 export interface TimelineEntry {
   id: string;
-  kind: "visit" | "lab" | "examination" | "symptom" | "treatment" | "procedure" | "note" | "result";
+  kind: "visit" | "planned" | "lab" | "examination" | "symptom" | "treatment" | "procedure" | "note" | "result";
   title: string;
   date: string;
   certainty: DateValue["kind"];
@@ -49,7 +49,10 @@ export function buildTimeline(
   allFacts: Fact[],
   documents: SourceDocument[],
   encounters: Encounter[],
+  /** Appointments after this date are planned, not past visits. */
+  today: ISODate | null = null,
 ): TimelineEntry[] {
+  const future = (d: ISODate | null) => !!(today && d && d > today);
   const facts = allFacts.filter((f) => f.verification !== "rejected" && f.type !== "clarification");
   const entries: TimelineEntry[] = [];
   const byEncounter = new Map<string, Fact[]>();
@@ -62,10 +65,10 @@ export function buildTimeline(
       byEncounter.set(enc.id, [...(byEncounter.get(enc.id) ?? []), f]);
       continue;
     }
-    const kind = FACT_KIND[f.type];
+    const evDate = sortableDate(f.eventDate);
+    const kind = f.type === "appointment" && future(evDate) ? "planned" : FACT_KIND[f.type];
     if (!kind) continue;
     const docDate = f.documentDate;
-    const evDate = sortableDate(f.eventDate);
     entries.push({
       id: `fact:${f.id}`,
       kind,
@@ -87,7 +90,7 @@ export function buildTimeline(
     const docs = documents.filter((d) => e.documentIds.includes(d.id));
     entries.push({
       id: `enc:${e.id}`,
-      kind: e.kind === "visit" ? "visit" : e.kind === "lab" ? "lab" : "examination",
+      kind: e.kind === "visit" ? (future(sortableDate(e.date)) ? "planned" : "visit") : e.kind === "lab" ? "lab" : "examination",
       title: e.title,
       date: formatDateValue(e.date),
       certainty: e.date.kind,

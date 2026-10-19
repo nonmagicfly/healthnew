@@ -1,5 +1,5 @@
 import type { Fact } from "../model";
-import { formatDateValue } from "./dates";
+import { formatDateValue, sortableDate } from "./dates";
 import { isConfirmedTaking, MEDICATION_STATUS_LABEL } from "./facts";
 
 export interface StateItem {
@@ -43,8 +43,45 @@ function item(f: Fact, detail: string | null = null): StateItem {
   };
 }
 
+/** Same medicine across documents: the first word of its name, case and ё-insensitive. */
+export function medicationKey(f: Fact): string | null {
+  if (f.value.kind !== "medication") return null;
+  const name = (f.value.name ?? f.label).toLowerCase().replace(/ё/g, "е").trim();
+  return name.split(/[\s,(]/)[0] || null;
+}
+
+const factDate = (f: Fact) => sortableDate(f.eventDate) ?? f.documentDate;
+const ru = (d: string) => d.split("-").reverse().join(".");
+
+/** One line per medicine: sources of every mention are combined, the latest document says what is said now. */
+function medicationItems(meds: Fact[], state: HealthState) {
+  const groups = new Map<string, Fact[]>();
+  for (const f of meds) {
+    const k = medicationKey(f) ?? f.id;
+    groups.set(k, [...(groups.get(k) ?? []), f]);
+  }
+  for (const group of groups.values()) {
+    const byDate = [...group].sort((a, b) => (factDate(a) ?? "").localeCompare(factDate(b) ?? ""));
+    const docs = [...new Set(group.flatMap((f) => f.sources.map((s) => s.documentId)))];
+    const more = docs.length > 1 ? `; упоминается в документах: ${docs.length}` : "";
+    const taking = byDate.filter(isConfirmedTaking).at(-1);
+    const stopped = byDate.filter((f) => f.value.kind === "medication" && f.value.status === "stopped").at(-1);
+    if (taking && taking.value.kind === "medication") {
+      const since = taking.validity.confirmedAt?.slice(0, 10) ?? factDate(taking);
+      const stoppedAt = stopped ? factDate(stopped) : null;
+      // A later document saying it was stopped does not change what you confirmed; it is shown so you can check.
+      const warn = stoppedAt && (!since || stoppedAt >= since) ? `; в документе от ${ru(stoppedAt)} отмечена отмена, проверьте` : "";
+      state.takingMedications.push({ ...item(taking, MEDICATION_STATUS_LABEL[taking.value.status] + more + warn), documentIds: docs });
+      continue;
+    }
+    const latest = byDate.filter((f) => f.validity.status !== "ended").at(-1);
+    if (!latest || latest.value.kind !== "medication" || latest.value.status === "stopped") continue;
+    state.otherMedications.push({ ...item(latest, MEDICATION_STATUS_LABEL[latest.value.status] + more), documentIds: docs });
+  }
+}
+
 /** Builds the current state from facts. Nothing here is stored; it is recomputed on every read. */
-export function buildState(allFacts: Fact[]): HealthState {
+export function buildState(allFacts: Fact[], today: string | null = null): HealthState {
   const facts = allFacts.filter((f) => f.verification !== "rejected");
   const state: HealthState = {
     currentComplaints: [],
@@ -70,10 +107,6 @@ export function buildState(allFacts: Fact[]): HealthState {
         if (f.validity.status !== "ended") state.conditions.push(item(f, "Формулировка врача"));
         break;
       case "medication":
-        if (f.value.kind !== "medication") break;
-        if (isConfirmedTaking(f)) state.takingMedications.push(item(f, MEDICATION_STATUS_LABEL[f.value.status]));
-        else if (f.value.status !== "stopped" && f.validity.status !== "ended")
-          state.otherMedications.push(item(f, MEDICATION_STATUS_LABEL[f.value.status]));
         break;
       case "allergy":
         state.allergies.push(item(f));
@@ -84,14 +117,17 @@ export function buildState(allFacts: Fact[]): HealthState {
           state.openQuestions.push(item(f, f.value.resolution === "postponed" ? "Отложено" : "Требует уточнения"));
         break;
       case "appointment":
-        if (f.value.kind === "appointment" && f.value.attended === "unknown")
-          state.openQuestions.push(item(f, "Посещение не подтверждено"));
+        if (f.value.kind === "appointment" && f.value.attended === "unknown") {
+          const d = sortableDate(f.eventDate);
+          state.openQuestions.push(item(f, today && d && d > today ? "Запланировано" : "Посещение не подтверждено"));
+        }
         break;
       case "examination":
         if (f.validity.status === "current") state.openQuestions.push(item(f, "Обследование не завершено"));
         break;
     }
   }
+  medicationItems(facts.filter((f) => f.type === "medication" && f.value.kind === "medication"), state);
   return state;
 }
 

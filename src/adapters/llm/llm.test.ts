@@ -170,6 +170,22 @@ describe("extraction with a connected model", () => {
     expect(after.documentDate).toBe("2025-04-07");
   });
 
+  it("finds transcript quotes copied with timecode and speaker, and never proposes a prescription as taken", async () => {
+    const out: ExtractionOutput = {
+      documentDate: null,
+      encounter: null,
+      items: [
+        it0({ type: "medication", label: "Витамин D", quote: "[00:00:40] Врач: Назначаю витамин D 2000 МЕ ежедневно.", medication: { name: "Витамин D", dose: "2000 МЕ", status: "prescribed" }, proposeCurrent: true }),
+      ],
+    };
+    const { service, document } = await uploadTranscript(liveModel(new FakeModel(() => out)));
+    await service.extractWithModel("me", document.id, true);
+    const [vitD] = (await service.getDocument("me", document.id)).proposal!.items;
+    expect(vitD.draft.sources[0]).toMatchObject({ quoteIsExact: true, timecode: "00:00:40", page: null });
+    expect(vitD.group).toBe("history");
+    expect(vitD.stateChange).toBeUndefined();
+  });
+
   it("does not replace a date the user entered at upload", async () => {
     const out: ExtractionOutput = { ...EXTRACTION, documentDate: { ...unknownDate, kind: "exact", date: "2025-04-07" } };
     const ctx = await createTestService({ live: liveModel(new FakeModel(() => out)) });

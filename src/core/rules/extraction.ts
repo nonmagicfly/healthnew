@@ -110,8 +110,12 @@ export function locateQuote(quote: string, version: ContentVersion | undefined):
   if (!version) return null;
   const q = squash(escapeUntrusted(quote));
   if (q.length < 3) return null;
-  for (const s of version.segments) {
-    if (squash(escapeUntrusted(s.text)).includes(q)) return { versionId: version.id, page: null, segmentId: s.id, timecode: s.timecode, speaker: s.speaker };
+  // Models often copy a transcript line with its timecode and speaker: «[00:00:05] Врач: …».
+  const bare = squash(escapeUntrusted(quote.replace(/^\s*\[?\d{1,2}:\d{2}(?::\d{2})?\]?\s*/, "").replace(/^\s*[А-ЯЁA-Z][а-яёa-z]{1,15}\s*:\s*/, "")));
+  for (const needle of bare.length >= 3 && bare !== q ? [q, bare] : [q]) {
+    for (const s of version.segments) {
+      if (squash(escapeUntrusted(s.text)).includes(needle)) return { versionId: version.id, page: null, segmentId: s.id, timecode: s.timecode, speaker: s.speaker };
+    }
   }
   const i = version.pages.findIndex((p) => squash(escapeUntrusted(p)).includes(q));
   return i >= 0 ? { versionId: version.id, page: i + 1 } : null;
@@ -227,7 +231,8 @@ export function proposalFromExtraction(doc: SourceDocument, versions: ContentVer
 
     let group: ProposalItem["group"] = it.type === "clarification" ? "clarify" : "history";
     let stateChange: ProposalItem["stateChange"];
-    if (it.proposeCurrent && it.type === "medication") {
+    // Only a document saying the person takes it may suggest "taking now"; a prescription is not intake.
+    if (it.proposeCurrent && it.type === "medication" && it.medication?.status === "mentioned_taking") {
       group = "state_change";
       stateChange = { medicationStatus: "taking_now" };
     } else if (it.proposeCurrent && (it.type === "complaint" || it.type === "condition" || it.type === "allergy")) {
