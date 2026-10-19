@@ -148,6 +148,28 @@ describe("extraction with a connected model", () => {
     await expect(service.setDocumentDate("me", document.id, "2025-02-30")).rejects.toThrow(ValidationError);
   });
 
+  it("extracts again without duplicating facts and fills dates that were missing", async () => {
+    const lab = it0({ type: "lab_result", label: "Ферритин 250 нг/мл", quote: "Ферритин в прошлый раз был 250 нг/мл", lab: { name: "Ферритин", value: "250", unit: "нг/мл", reference: null, method: null, origin: "lab_report" } });
+    let reply: ExtractionOutput = { documentDate: null, encounter: null, items: [lab] };
+    const { service, document } = await uploadTranscript(liveModel(new FakeModel(() => reply)));
+    await service.extractWithModel("me", document.id, true);
+    await service.applyProposal("me", document.id, { acceptedStateChanges: [], postponedClarifications: [] });
+
+    reply = {
+      documentDate: { ...unknownDate, kind: "exact", date: "2025-04-07" },
+      encounter: null,
+      items: [it0({ type: "complaint", label: "Слабость", quote: "Врач: Ферритин" }), { ...lab, eventDate: { ...unknownDate, kind: "exact", date: "2025-04-05" } }],
+    };
+    await service.extractWithModel("me", document.id, true);
+    const { document: after, facts } = await service.applyProposal("me", document.id, { acceptedStateChanges: [], postponedClarifications: [] });
+    const ferritin = facts.filter((f) => f.type === "lab_result");
+    expect(ferritin).toHaveLength(1);
+    expect(ferritin[0]).toMatchObject({ eventDate: { kind: "exact", date: "2025-04-05" }, documentDate: "2025-04-07" });
+    expect(ferritin[0].revisions.at(-1)?.action).toBe("dates_filled");
+    expect(facts).toHaveLength(2);
+    expect(after.documentDate).toBe("2025-04-07");
+  });
+
   it("does not replace a date the user entered at upload", async () => {
     const out: ExtractionOutput = { ...EXTRACTION, documentDate: { ...unknownDate, kind: "exact", date: "2025-04-07" } };
     const ctx = await createTestService({ live: liveModel(new FakeModel(() => out)) });

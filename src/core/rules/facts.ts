@@ -103,6 +103,19 @@ export function addSource(f: Fact, src: SourceRef, at: string): Fact {
   return withRevision(f, { ...f, sources: [...f.sources, src] }, "source_added", at, null);
 }
 
+/**
+ * Fills dates a fact was missing from a later extraction of the same document.
+ * Never overrides a known date or anything the user corrected.
+ */
+export function fillMissingDates(f: Fact, eventDate: DateValue, documentDate: string | null, at: string): Fact {
+  if (f.revisions.some((r) => r.action === "corrected")) return f;
+  const fillEvent = f.eventDate.kind === "unknown" && eventDate.kind !== "unknown";
+  const fillDoc = !f.documentDate && !!documentDate;
+  if (!fillEvent && !fillDoc) return f;
+  const next = { ...f, eventDate: fillEvent ? eventDate : f.eventDate, documentDate: fillDoc ? documentDate : f.documentDate };
+  return withRevision(f, next, "dates_filled", at, "Дата найдена при повторном извлечении");
+}
+
 export function resolveClarification(f: Fact, answer: string, at: string): Fact {
   if (f.value.kind !== "clarification") throw new Error("Not a clarification");
   return withRevision(

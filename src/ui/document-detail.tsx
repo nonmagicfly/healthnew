@@ -456,7 +456,7 @@ export function DocumentDetailView() {
   );
 }
 
-const SENDABLE: SourceDocument["status"][] = ["extraction_ready", "extraction_unavailable", "recognition_unavailable", "error"];
+const SENDABLE: SourceDocument["status"][] = ["extraction_ready", "extraction_unavailable", "recognition_unavailable", "error", "applied"];
 
 function canSendToModel(d: SourceDocument) {
   return !d.sampleKey && SENDABLE.includes(d.status);
@@ -469,6 +469,7 @@ function ModelExtract({ doc, onDone }: { doc: SourceDocument; onDone: () => void
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   if (!liveModel) return null;
+  const again = doc.status === "applied";
   const send = async () => {
     setBusy(true);
     setError(null);
@@ -482,7 +483,12 @@ function ModelExtract({ doc, onDone }: { doc: SourceDocument; onDone: () => void
     }
   };
   return (
-    <Card title="Извлечь факты с помощью модели">
+    <Card title={again ? "Извлечь факты заново" : "Извлечь факты с помощью модели"}>
+      {again && (
+        <p className="mb-2 text-sm text-slate-700">
+          Модель прочитает документ ещё раз. Совпадающие факты не задвоятся, а недостающие даты дополнятся; исправленное вами не изменится, добавленные ранее факты останутся.
+        </p>
+      )}
       <p className="text-sm text-slate-700">
         Текст документа (а для PDF без текстового слоя сам файл) будет отправлен в {liveModel.provider}, модель {liveModel.model}. Модель только предлагает факты: вы увидите их в карточке и решите, что добавить. Без вашего согласия ничего не отправляется.
       </p>

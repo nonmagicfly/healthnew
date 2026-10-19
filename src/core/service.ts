@@ -26,6 +26,7 @@ import type {
 } from "./ports";
 import {
   addSource,
+  fillMissingDates,
   confirmCurrent,
   correctFact,
   endFact,
@@ -41,7 +42,7 @@ import { retrieveFacts } from "./rules/retrieval";
 import { buildLlmRequest } from "./rules/llm-request";
 import { exactDate, unknownDate } from "./rules/dates";
 import { parseLabValue } from "./rules/lab-values";
-import { normalizeIsoDate } from "./rules/extraction";
+import { contentKey, normalizeIsoDate } from "./rules/extraction";
 
 export class NotFoundError extends Error {}
 export class ValidationError extends Error {}
@@ -363,7 +364,7 @@ export class HealthService {
     if (!this.d.live) throw new ValidationError("Модель не подключена: укажите ключ API в .env.local.");
     if (!consent) throw new ValidationError("Нужно согласие на отправку документа.");
     if (doc.sampleKey) throw new ValidationError("У примера уже есть подготовленный разбор; он не отправляется модели.");
-    if (doc.status === "review_pending" || doc.status === "applied") throw new ValidationError("Факты этого документа уже извлечены.");
+    // A repeated extraction (status applied or review_pending) is allowed: matching facts are merged, not duplicated.
     const versions = await this.d.repo.listVersions(profileId, documentId);
     const bytes = doc.original ? await this.d.files.get(doc.original.sha256) : null;
     const ex = await this.d.live.extractor.extract({ document: doc, versions, original: bytes && doc.original ? { bytes, mime: doc.original.mime } : null });
@@ -406,6 +407,11 @@ export class HealthService {
 
     const facts = await this.d.repo.listFacts(profileId);
     const byKey = new Map(facts.map((f) => [f.dedupKey, f]));
+    // Facts a model extracted from this document before, by what they say: a repeated extraction merges into them.
+    const llmKey = (f: Pick<Fact, "type" | "label" | "value">) => `llm:${documentId}:${contentKey(f)}`;
+    for (const f of facts) {
+      if (f.extraction.method === "llm" && f.sources.some((s) => s.documentId === documentId) && !byKey.has(llmKey(f))) byKey.set(llmKey(f), f);
+    }
     const touched = new Map<string, Fact>();
 
     const materialize = (draft: FactDraft): Fact => {
@@ -413,6 +419,7 @@ export class HealthService {
       if (prev) {
         let f = prev;
         for (const s of draft.sources) f = addSource(f, s, at);
+        if (draft.extraction.method === "llm") f = fillMissingDates(f, draft.eventDate, draft.documentDate, at);
         return f;
       }
       const { conflictsWith: _c, aboutKeys: _a, ...rest } = draft;

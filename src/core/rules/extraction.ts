@@ -144,13 +144,35 @@ function validityFor(type: FactType, eventDate: DateValue): Validity {
   return { status, from: type === "medication" ? eventDate : null, to: null, confirmedAt: null };
 }
 
+/**
+ * What a fact says, independent of its position in the model output, so a repeated
+ * extraction of the same document matches the facts it produced before.
+ */
+export function contentKey(f: { type: FactType; label: string; value: FactValue }): string {
+  const v = f.value;
+  const part =
+    v.kind === "lab_result"
+      ? `${v.indicator ?? v.rawName}=${v.value.raw}${v.unit ?? ""}`
+      : v.kind === "medication"
+        ? `${v.name ?? f.label}:${v.status}`
+        : f.label;
+  return `${f.type}:${squash(part)}`;
+}
+
 const NOT_FOUND = "Цитата не найдена дословно в распознанном тексте: сверьте с оригиналом.";
 const NO_TEXT = "Текст прочитан моделью из файла без текстового слоя: цитата не сверена программой.";
 
 /** Builds a proposal from model output. Items without a label or quote are dropped. */
 export function proposalFromExtraction(doc: SourceDocument, versions: ContentVersion[], out: ExtractionOutput, model: string): Proposal {
   const version = versions.find((v) => v.method !== "prepared");
-  const keyOf = (i: number) => `llm:${doc.id}:${i}`;
+  const seen = new Map<string, number>();
+  const keys = out.items.map((it) => {
+    const base = `llm:${doc.id}:${contentKey({ type: it.type, label: it.label.trim(), value: valueFor(it) })}`;
+    const n = (seen.get(base) ?? 0) + 1;
+    seen.set(base, n);
+    return n === 1 ? base : `${base}#${n}`;
+  });
+  const keyOf = (i: number) => keys[i];
   // A date the user entered wins; otherwise the date printed on the document (or of the visit it records).
   const exactOf = (d: ExtractedDate | null | undefined) => {
     const v = d ? toDateValue(d) : null;

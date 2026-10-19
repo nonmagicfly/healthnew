@@ -222,7 +222,7 @@ export type FactValue =
 
 export interface FactRevision {
   at: ISODateTime;
-  action: "created" | "corrected" | "confirmed_current" | "ended" | "status_changed" | "source_added" | "rejected" | "resolved";
+  action: "created" | "corrected" | "confirmed_current" | "ended" | "status_changed" | "source_added" | "rejected" | "resolved" | "dates_filled";
   reason: string | null;
   before: Partial<Pick<Fact, "label" | "value" | "validity" | "verification" | "eventDate">> | null;
   after: Partial<Pick<Fact, "label" | "value" | "validity" | "verification" | "eventDate">> | null;
