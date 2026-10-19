@@ -308,10 +308,13 @@ function ProposalCard({ detail, onApplied }: { detail: Detail; onApplied: () => 
   };
 
   const fromModel = items.some((i) => i.draft.extraction.method === "llm");
+  const fromParser = items.some((i) => i.draft.extraction.method === "parser");
   const proposedDate = detail.proposal!.documentDate;
+  const patientName = detail.proposal!.patientName;
 
   return (
-    <Card title="Что изменится после применения" actions={fromModel ? <Badge tone="blue">Предложено моделью</Badge> : <DemoBadge>Подготовленный разбор</DemoBadge>}>
+    <Card title="Что изменится после применения" actions={fromModel ? <Badge tone="blue">Предложено моделью</Badge> : fromParser ? <Badge tone="green">Разобрано по шаблону, без модели</Badge> : <DemoBadge>Подготовленный разбор</DemoBadge>}>
+      {patientName && <p className="mb-2 text-sm text-slate-700">Пациент в бланке: {patientName}</p>}
       {proposedDate && (
         <p className="mb-2 rounded bg-sky-50 p-2 text-sm text-sky-900">
           Дата документа из текста: {formatIso(proposedDate)}. Она будет сохранена при применении; изменить её можно в заголовке документа.
@@ -417,6 +420,7 @@ export function DocumentDetailView() {
         <SourcePane key={focusId ?? "none"} detail={detail.data} focusFact={focusFact} focusSegment={focusSegment} />
         <div className="space-y-4">
           {d.status === "review_pending" && detail.data.proposal && <ProposalCard detail={detail.data} onApplied={bump} />}
+          {canParseLocally(d) && <LocalParse doc={d} onDone={bump} />}
           {canSendToModel(d) && <ModelExtract doc={d} onDone={bump} />}
           {d.status !== "review_pending" && (
             <Card title={`Извлечённые факты (${detail.data.facts.length})`}>
@@ -543,5 +547,39 @@ function DocumentDate({ doc, onSaved }: { doc: SourceDocument; onSaved: () => vo
       <button type="button" className="underline" onClick={() => setEditing(false)}>Отмена</button>
       {error && <span role="alert" className="text-red-700">{error}</span>}
     </form>
+  );
+}
+
+function canParseLocally(d: SourceDocument) {
+  return !d.sampleKey && !!d.original && ["extraction_ready", "extraction_unavailable", "applied"].includes(d.status);
+}
+
+/** Tries the local lab-form parser: free, instant, and the document stays on this computer. */
+function LocalParse({ doc, onDone }: { doc: SourceDocument; onDone: () => void }) {
+  const { base } = useProfile();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const run = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await postJson(`${base}/documents/${doc.id}/parse`, {});
+      onDone();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Card title="Разобрать бланк без модели">
+      <p className="text-sm text-slate-700">
+        Бланки анализов известного вида разбираются прямо на этом компьютере: бесплатно и без отправки куда-либо. {doc.status === "applied" && "Совпадающие факты не задвоятся."}
+      </p>
+      <button type="button" onClick={run} disabled={busy} className="mt-2 rounded border border-teal-700 px-4 py-1.5 text-sm text-teal-800 disabled:opacity-50">
+        {busy ? "Разбираю…" : "Разобрать по шаблону"}
+      </button>
+      {error && <p role="alert" className="mt-2 text-sm text-red-700">{error}</p>}
+    </Card>
   );
 }

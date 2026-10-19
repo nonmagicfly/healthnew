@@ -292,6 +292,8 @@ export interface Proposal {
   documentId: string;
   /** Date printed on the document, proposed when the user did not enter one at upload. */
   documentDate?: ISODate | null;
+  /** Patient name printed on a lab form, shown so a form of another person is noticed. */
+  patientName?: string | null;
   encounter: Omit<Encounter, "id" | "profileId" | "documentIds"> & { key: string } | null;
   items: ProposalItem[];
 }

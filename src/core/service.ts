@@ -9,6 +9,7 @@ import type {
   FactDraft,
   MedicationStatus,
   Profile,
+  Proposal,
   ProposalDecision,
   SourceDocument,
   SourceRef,
@@ -42,7 +43,8 @@ import { retrieveFacts } from "./rules/retrieval";
 import { buildLlmRequest } from "./rules/llm-request";
 import { exactDate, unknownDate } from "./rules/dates";
 import { parseLabValue } from "./rules/lab-values";
-import { contentKey, normalizeIsoDate } from "./rules/extraction";
+import { contentKey, normalizeIsoDate, proposalFromExtraction } from "./rules/extraction";
+import { parseLabForm } from "./rules/lab-form";
 
 export class NotFoundError extends Error {}
 export class ValidationError extends Error {}
@@ -324,6 +326,15 @@ export class HealthService {
       }
       const versions = await this.d.repo.listVersions(doc.profileId, doc.id);
       const ex = await this.d.extractor.extract({ document: current, versions });
+      if (!ex.ok && !current.sampleKey) {
+        // A lab form of a known layout is parsed locally: no model, nothing sent anywhere.
+        const proposal = await this.labFormProposal(current, versions);
+        if (proposal) {
+          await this.d.repo.saveProposal(doc.profileId, proposal);
+          await setStatus("review_pending", null);
+          return current;
+        }
+      }
       if (!ex.ok && ex.reason === "not_connected" && this.d.live && !current.sampleKey) {
         // Nothing is sent automatically: the user decides per document.
         await setStatus("extraction_ready", [current.status === "recognition_unavailable" ? current.statusMessage : null, this.readyMessage()].filter(Boolean).join(" "));
@@ -343,6 +354,59 @@ export class HealthService {
       await setStatus("error", "Не удалось обработать документ. Оригинал сохранён.");
     }
     return current;
+  }
+
+  /** Proposal from the local lab-form parser, or null when the layout is not recognized. */
+  private async labFormProposal(doc: SourceDocument, versions: ContentVersion[]): Promise<Proposal | null> {
+    const text = versions.find((v) => v.method === "pdf_text_layer" || v.method === "plain_text");
+    const parsed = text ? parseLabForm(text.pages) : null;
+    if (!parsed) return null;
+    const proposal = proposalFromExtraction(doc, versions, parsed, null, "parser");
+    proposal.patientName = parsed.patientName;
+    // A form printed for someone else (a family member) is pointed out before anything is applied.
+    const others = new Set<string>();
+    for (const d of await this.d.repo.listDocuments(doc.profileId)) {
+      if (d.id === doc.id) continue;
+      const name = (await this.d.repo.getProposal(doc.profileId, d.id))?.patientName;
+      if (name) others.add(name.toLowerCase());
+    }
+    if (parsed.patientName && others.size && !others.has(parsed.patientName.toLowerCase())) {
+      const key = `llm:${doc.id}:patient`;
+      proposal.items.unshift({
+        key,
+        group: "clarify",
+        explanation: "ФИО в бланке отличается от других документов профиля.",
+        draft: {
+          type: "clarification",
+          label: `Бланк выписан на «${parsed.patientName}». Это документ этого профиля?`,
+          value: { kind: "clarification", question: `Бланк выписан на «${parsed.patientName}». Это документ этого профиля?`, aboutFactIds: [], resolution: "open", answer: null },
+          originalText: parsed.patientName,
+          sources: [{ documentId: doc.id, versionId: text!.id, page: 1, quote: parsed.patientName, quoteIsExact: false, timecode: null, segmentId: null, speaker: null, sourceType: "personal" }],
+          eventDate: { kind: "unknown" },
+          documentDate: proposal.documentDate ?? doc.documentDate,
+          validity: { status: "unknown", from: null, to: null, confirmedAt: null },
+          extraction: { method: "parser", confidence: null, model: null },
+          specialist: doc.specialist,
+          problem: null,
+          dedupKey: key,
+          aboutKeys: [],
+        },
+      });
+    }
+    return proposal;
+  }
+
+  /** Parses an already uploaded document with the local lab-form parser. */
+  async parseLocally(profileId: string, documentId: string) {
+    const doc = await this.d.repo.getDocument(profileId, documentId);
+    if (!doc) throw new NotFoundError("Документ не найден");
+    if (doc.sampleKey) throw new ValidationError("У примера уже есть подготовленный разбор.");
+    const proposal = await this.labFormProposal(doc, await this.d.repo.listVersions(profileId, documentId));
+    if (!proposal) throw new ValidationError("Шаблон бланка не распознан: этот документ можно разобрать только с помощью модели.");
+    await this.d.repo.saveProposal(profileId, proposal);
+    const updated: SourceDocument = { ...doc, status: "review_pending", statusMessage: null };
+    await this.d.repo.saveDocument(updated);
+    return updated;
   }
 
   private readyMessage() {
@@ -410,7 +474,7 @@ export class HealthService {
     // Facts a model extracted from this document before, by what they say: a repeated extraction merges into them.
     const llmKey = (f: Pick<Fact, "type" | "label" | "value">) => `llm:${documentId}:${contentKey(f)}`;
     for (const f of facts) {
-      if (f.extraction.method === "llm" && f.sources.some((s) => s.documentId === documentId) && !byKey.has(llmKey(f))) byKey.set(llmKey(f), f);
+      if ((f.extraction.method === "llm" || f.extraction.method === "parser") && f.sources.some((s) => s.documentId === documentId) && !byKey.has(llmKey(f))) byKey.set(llmKey(f), f);
     }
     const touched = new Map<string, Fact>();
 
@@ -419,7 +483,7 @@ export class HealthService {
       if (prev) {
         let f = prev;
         for (const s of draft.sources) f = addSource(f, s, at);
-        if (draft.extraction.method === "llm") f = fillMissingDates(f, draft.eventDate, draft.documentDate, at);
+        if (draft.extraction.method === "llm" || draft.extraction.method === "parser") f = fillMissingDates(f, draft.eventDate, draft.documentDate, at);
         return f;
       }
       const { conflictsWith: _c, aboutKeys: _a, ...rest } = draft;

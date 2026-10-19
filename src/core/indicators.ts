@@ -10,13 +10,13 @@ export interface IndicatorDef {
 
 export const INDICATORS: IndicatorDef[] = [
   { code: "ferritin", name: "Ферритин", group: "Обмен железа", priority: true, aliases: ["ферритин"] },
-  { code: "ldl", name: "ЛПНП", group: "Липидный профиль", priority: true, aliases: ["лпнп", "хс-лпнп", "холестерин лпнп", "ldl"] },
-  { code: "hdl", name: "ЛПВП", group: "Липидный профиль", priority: true, aliases: ["лпвп", "хс-лпвп", "холестерин лпвп", "hdl"] },
+  { code: "ldl", name: "ЛПНП", group: "Липидный профиль", priority: true, aliases: ["лпнп", "хс-лпнп", "холестерин лпнп", "холестерин-лпнп", "ldl"] },
+  { code: "hdl", name: "ЛПВП", group: "Липидный профиль", priority: true, aliases: ["лпвп", "хс-лпвп", "холестерин лпвп", "холестерин-лпвп", "hdl"] },
   { code: "chol", name: "Общий холестерин", group: "Липидный профиль", priority: true, aliases: ["общий холестерин", "холестерин общий"] },
   { code: "tg", name: "Триглицериды", group: "Липидный профиль", priority: true, aliases: ["триглицериды"] },
   { code: "alt", name: "АЛТ", group: "Печёночные показатели", priority: true, aliases: ["алт", "аланинаминотрансфераза", "alt"] },
   { code: "ast", name: "АСТ", group: "Печёночные показатели", priority: true, aliases: ["аст", "аспартатаминотрансфераза", "ast"] },
-  { code: "ggt", name: "ГГТ", group: "Печёночные показатели", priority: true, aliases: ["ггт", "гамма-гт"] },
+  { code: "ggt", name: "ГГТ", group: "Печёночные показатели", priority: true, aliases: ["ггт", "гамма-гт", "гамма-глутамилтрансфераза"] },
   { code: "bili", name: "Билирубин общий", group: "Печёночные показатели", priority: true, aliases: ["билирубин общий", "билирубин"] },
   { code: "iron", name: "Железо сывороточное", group: "Обмен железа", priority: false, aliases: ["железо сывороточное", "сывороточное железо", "железо", "fe"] },
   { code: "transferrin", name: "Трансферрин", group: "Обмен железа", priority: false, aliases: ["трансферрин"] },
@@ -40,6 +40,8 @@ export const INDICATORS: IndicatorDef[] = [
   { code: "uric", name: "Мочевая кислота", group: "Биохимия", priority: false, aliases: ["мочевая кислота"] },
   { code: "protein", name: "Белок общий", group: "Биохимия", priority: false, aliases: ["белок общий", "общий белок"] },
   { code: "albumin", name: "Альбумин", group: "Биохимия", priority: false, aliases: ["альбумин"] },
+  { code: "calcium", name: "Кальций общий", group: "Биохимия", priority: false, aliases: ["кальций общий", "кальций"] },
+  { code: "amylase", name: "Альфа-амилаза", group: "Биохимия", priority: false, aliases: ["альфа-амилаза", "амилаза"] },
   { code: "potassium", name: "Калий", group: "Биохимия", priority: false, aliases: ["калий", "k+"] },
   { code: "sodium", name: "Натрий", group: "Биохимия", priority: false, aliases: ["натрий", "na+"] },
   { code: "tsh", name: "ТТГ", group: "Гормоны и витамины", priority: false, aliases: ["ттг", "тиреотропный гормон", "tsh"] },
@@ -69,9 +71,15 @@ export function normalizeIndicator(rawName: string): string | null {
   // "Гемоглобин (HGB)": the name outside brackets, then the abbreviation inside them.
   const candidates = [full.replace(/\(.*?\)/g, "").replace(/[,:;.]+$/, "").trim(), ...[...full.matchAll(/\((.*?)\)/g)].map((m) => m[1].trim())];
   for (const s of candidates) {
+    // The longest matching alias wins: «билирубин прямой» is not «билирубин».
+    let best: { code: string; len: number } | null = null;
     for (const i of INDICATORS) {
-      if (i.aliases.some((a) => { const c = clean(a); return s === c || s.startsWith(c + " ") || s.startsWith(c + ","); })) return i.code;
+      for (const a of i.aliases) {
+        const c = clean(a);
+        if ((s === c || s.startsWith(c + " ") || s.startsWith(c + ",")) && (!best || c.length > best.len)) best = { code: i.code, len: c.length };
+      }
     }
+    if (best) return best.code;
   }
   return null;
 }

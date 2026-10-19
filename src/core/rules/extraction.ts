@@ -175,7 +175,7 @@ const NOT_FOUND = "Цитата не найдена дословно в расп
 const NO_TEXT = "Текст прочитан моделью из файла без текстового слоя: цитата не сверена программой.";
 
 /** Builds a proposal from model output. Items without a label or quote are dropped. */
-export function proposalFromExtraction(doc: SourceDocument, versions: ContentVersion[], raw: ExtractionOutput, model: string): Proposal {
+export function proposalFromExtraction(doc: SourceDocument, versions: ContentVersion[], raw: ExtractionOutput, model: string | null, method: "llm" | "parser" = "llm"): Proposal {
   const out = unescapeDeep(raw);
   const version = versions.find((v) => v.method !== "prepared");
   const seen = new Map<string, number>();
@@ -222,7 +222,7 @@ export function proposalFromExtraction(doc: SourceDocument, versions: ContentVer
       eventDate,
       documentDate,
       validity: validityFor(it.type, eventDate),
-      extraction: { method: "llm", confidence: null, model },
+      extraction: { method, confidence: null, model },
       specialist: doc.specialist,
       problem: it.problem?.trim() || null,
       dedupKey: keyOf(i),
@@ -240,7 +240,7 @@ export function proposalFromExtraction(doc: SourceDocument, versions: ContentVer
       stateChange = { validity: { status: "current", from: null, to: null, confirmedAt: null } };
     }
     const explanation = [it.explanation.trim(), ...notes].filter(Boolean).join(" ");
-    return { key: draft.dedupKey, group, draft, stateChange, explanation: explanation || "Предложено моделью; проверьте по источнику." };
+    return { key: draft.dedupKey, group, draft, stateChange, explanation: explanation || (method === "llm" ? "Предложено моделью; проверьте по источнику." : "Разобрано по шаблону; проверьте по источнику.") };
   });
 
   const enc = out.encounter;
