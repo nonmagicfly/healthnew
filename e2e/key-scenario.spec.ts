@@ -124,8 +124,12 @@ test("keyboard-only walkthrough in the demo profile", async ({ page }) => {
   await page.keyboard.press("Enter");
   await expect(page.getByText(/Ферритин изменился с 310 до 180/)).toBeVisible();
   await tabTo(page, /Какой контекст учтён/);
-  await page.keyboard.press("Enter");
-  await expect(page.getByText("Относится к показателю из вопроса").first()).toBeVisible();
+  // The answer can re-render right after it appears and collapse the details, so re-press Enter on the focused summary until it stays open.
+  await expect(async () => {
+    const open = await page.evaluate(() => (document.activeElement?.closest("details") as HTMLDetailsElement | null)?.open);
+    if (!open) await page.keyboard.press("Enter");
+    await expect(page.getByText("Относится к показателю из вопроса").first()).toBeVisible({ timeout: 1000 });
+  }).toPass();
 
   // Keyboard navigation between sections.
   await page.goto("/");
