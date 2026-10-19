@@ -251,6 +251,44 @@ function Upload() {
   );
 }
 
+/** Adds every document waiting for review to the history at once, the same way bulk upload does. */
+function ApplyPending() {
+  const { base, bump, documents } = useProfile();
+  const pending = documents.filter((d) => d.document.status === "review_pending" && !d.document.sampleKey);
+  const [rows, setRows] = useState<BatchRow[]>([]);
+  const [busy, setBusy] = useState(false);
+  if (!pending.length && !rows.length) return null;
+  const run = async () => {
+    setBusy(true);
+    const next: BatchRow[] = [];
+    for (const { document: d } of pending) {
+      try {
+        const r = await api<AutoApplied>(`${base}/documents/${d.id}/auto-apply`, { method: "POST" });
+        next.push({ name: d.title, status: r.applied ? "applied" : "needs_review", doc: r.document, added: r.added, decisions: r.decisions, message: r.reason });
+      } catch (err) {
+        next.push({ name: d.title, status: "needs_review", doc: d, message: (err as Error).message });
+      }
+    }
+    setRows(next);
+    setBusy(false);
+    bump();
+  };
+  return (
+    <div className="mb-3 rounded bg-amber-50 p-2 text-sm text-amber-900">
+      {pending.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span>Ждут проверки: {pending.length}.</span>
+          <button type="button" onClick={run} disabled={busy} className="rounded bg-teal-700 px-3 py-1 text-white disabled:opacity-50">
+            {busy ? "Добавляю…" : "Добавить все в историю"}
+          </button>
+          <span className="text-xs">Факты будут помечены «не проверено»; что принимаете сейчас и что актуально, решаете вы.</span>
+        </div>
+      )}
+      {rows.length > 0 && <BatchSummary rows={rows} />}
+    </div>
+  );
+}
+
 /** Result of a bulk upload: what was added and what waits for the user's decision. */
 function BatchSummary({ rows }: { rows: BatchRow[] }) {
   const applied = rows.filter((r) => r.status === "applied");
@@ -295,6 +333,7 @@ export function DocumentsView() {
   return (
     <div className="grid gap-4 lg:grid-cols-[1fr_380px]">
       <Card title="Документы">
+        <ApplyPending />
         <fieldset className="mb-3 grid gap-2 text-sm sm:grid-cols-5">
           <legend className="sr-only">Фильтры</legend>
           <label>

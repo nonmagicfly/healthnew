@@ -187,3 +187,14 @@ test("several files are uploaded at once, each with its own result", async ({ pa
   await list.getByRole("link", { name: "приём-2.txt" }).click();
   await expect(page).toHaveURL(/\/documents\/.+/);
 });
+
+test("documents waiting for review are added to the history with one button", async ({ page }) => {
+  await useProfile(page, "me");
+  await page.goto("/documents");
+  const form = ["ТЕСТОВФамилия: Дата: 02.03.2026", "Наименование исследования Результат Ед. изм. Нормальные значенияФлаг", "Железо мкмоль/л 9.0-21.5↑ 25.3"].join("\n");
+  await page.getByLabel(/Файл \(PDF/).setInputFiles([{ name: "один-бланк.txt", mimeType: "text/plain", buffer: Buffer.from(form) }]);
+  await expect(page).toHaveURL(/\/documents\/.+/);
+  await page.goto("/documents");
+  await page.getByRole("button", { name: "Добавить все в историю" }).click();
+  await expect(page.getByText(/Добавлено в историю: документов 1, новых фактов 1/)).toBeVisible();
+});
