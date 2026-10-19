@@ -1,5 +1,5 @@
 import type { Fact } from "../model";
-import { INDICATORS } from "../indicators";
+import { indicatorOf, INDICATORS, qualitativeIndicatorOf } from "../indicators";
 
 export type Topic = "medication" | "indicator" | "complaint" | "allergy" | "visits";
 
@@ -27,7 +27,13 @@ export function retrieveFacts(question: string, allFacts: Fact[]): Retrieval {
   const indicators = INDICATORS.filter((i) => i.aliases.some((a) => q.includes(a)) || q.includes(i.name.toLowerCase())).map((i) => i.code);
   if (/(печен|печён)/i.test(q)) indicators.push("alt", "ast", "ggt", "bili");
   if (/(липид|холестер)/i.test(q)) indicators.push("ldl", "hdl", "chol", "tg");
-  if (/желез/i.test(q)) indicators.push("ferritin");
+  if (/желез/i.test(q)) indicators.push("ferritin", "iron", "transferrin", "tsat", "tibc");
+  // Lab names outside the catalog (and catalog names written differently) match by the first word of the lab's own name.
+  for (const f of facts) {
+    if (f.value.kind !== "lab_result") continue;
+    const word = stem(f.value.rawName.split(/[\s(,]/)[0] ?? "");
+    if (word.length >= 3 && q.split(/\s+/).some((w) => stem(w) === word)) indicators.push(indicatorOf(f.value));
+  }
   if (indicators.length) topics.push("indicator");
 
   const medNames = facts
@@ -46,7 +52,7 @@ export function retrieveFacts(question: string, allFacts: Fact[]): Retrieval {
     if (topics.includes("allergy") && f.type === "allergy") add(f, "Вопрос об аллергиях");
     if (topics.includes("visits") && (f.type === "appointment" || f.type === "examination" || f.type === "diagnosis" || f.type === "condition"))
       add(f, "Вопрос о визитах и обследованиях");
-    const ind = f.value.kind === "lab_result" || f.value.kind === "qualitative" ? f.value.indicator : null;
+    const ind = f.value.kind === "lab_result" ? indicatorOf(f.value) : f.value.kind === "qualitative" ? qualitativeIndicatorOf(f.value.indicator) : null;
     if (ind && indicators.includes(ind)) add(f, "Относится к показателю из вопроса");
     if (indicators.includes("ferritin") && f.type === "procedure") add(f, "Лечение, отмеченное рядом с показателем");
     if (topics.includes("indicator") && f.type === "medication" && /статин/i.test(f.label) && indicators.some((i) => ["ldl", "chol", "alt"].includes(i)))

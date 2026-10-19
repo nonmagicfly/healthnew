@@ -171,6 +171,8 @@ export function IndicatorDetail({ code, period }: { code: string; period: { from
                 <tr key={r.factId} className="border-t border-slate-100 align-top">
                   <td className="py-1.5 pr-3 font-medium">
                     {r.raw} <span className="text-xs font-normal text-slate-500">({VALUE_TYPE[r.valueType]})</span>
+                    {r.flag === "high" && <Badge tone="amber">выше референса</Badge>}
+                    {r.flag === "low" && <Badge tone="amber">ниже референса</Badge>}
                   </td>
                   <td className="py-1.5 pr-3">{r.unit ?? <span className="text-slate-500">не указаны</span>}</td>
                   <td className="py-1.5 pr-3">{r.reference ?? "—"}</td>

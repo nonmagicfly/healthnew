@@ -16,7 +16,15 @@ import type {
 } from "../model";
 import { normalizeIndicator } from "../indicators";
 import { parseLabValue, parseReference } from "./lab-values";
-import { escapeUntrusted } from "./llm-request";
+import { escapeUntrusted, unescapeModelText } from "./llm-request";
+
+/** Applies unescapeModelText to every string in the model output. */
+function unescapeDeep<T>(v: T): T {
+  if (typeof v === "string") return unescapeModelText(v) as T;
+  if (Array.isArray(v)) return v.map(unescapeDeep) as T;
+  if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, unescapeDeep(x)])) as T;
+  return v;
+}
 
 /** Statuses a document can support. "taking_now" and "started_confirmed" come only from the user. */
 export const DOCUMENT_MEDICATION_STATUSES = ["prescribed", "mentioned_taking", "option_discussed", "stopped", "unknown"] as const;
@@ -163,7 +171,8 @@ const NOT_FOUND = "Цитата не найдена дословно в расп
 const NO_TEXT = "Текст прочитан моделью из файла без текстового слоя: цитата не сверена программой.";
 
 /** Builds a proposal from model output. Items without a label or quote are dropped. */
-export function proposalFromExtraction(doc: SourceDocument, versions: ContentVersion[], out: ExtractionOutput, model: string): Proposal {
+export function proposalFromExtraction(doc: SourceDocument, versions: ContentVersion[], raw: ExtractionOutput, model: string): Proposal {
+  const out = unescapeDeep(raw);
   const version = versions.find((v) => v.method !== "prepared");
   const seen = new Map<string, number>();
   const keys = out.items.map((it) => {

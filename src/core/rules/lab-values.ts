@@ -13,7 +13,8 @@ export function parseNumber(s: string): number | null {
  */
 export function parseLabValue(raw: string): LabValue {
   const base: LabValue = { raw, type: "qualitative", number: null, low: null, high: null, text: null };
-  const s = raw.trim().replace(/\s+/g, " ");
+  // ‹ › are the escaped < > of a document quoted to a model.
+  const s = raw.trim().replace(/\s+/g, " ").replace(/‹/g, "<").replace(/›/g, ">");
 
   let m = s.match(new RegExp(`^(<|≤|<=|менее|меньше)\\s*(${NUM})$`, "i"));
   if (m) return { ...base, type: "less_than", number: parseNumber(m[2]) };
@@ -67,7 +68,9 @@ export function formatLabValue(v: LabValue): string {
 }
 
 /** Simple comparison against the lab's own reference. Returns null when it cannot be decided. */
-export function referenceFlag(v: LabValue, ref: Reference | null): "low" | "high" | "normal" | null {
+export function referenceFlag(v: LabValue, stored: Reference | null): "low" | "high" | "normal" | null {
+  // References saved before "< 5,2" was parsed are read again from their raw text.
+  const ref = stored && stored.low === null && stored.high === null ? parseReference(stored.raw) : stored;
   if (!ref || v.type !== "numeric" || v.number === null) return null;
   if (ref.low !== null && v.number < ref.low) return "low";
   if (ref.high !== null && v.number > ref.high) return "high";

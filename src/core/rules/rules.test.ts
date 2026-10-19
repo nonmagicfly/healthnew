@@ -4,7 +4,9 @@ import { parseLabValue, parseReference, seriesKey } from "./lab-values";
 import { formatDateValue, inPeriod, sortableDate } from "./dates";
 import { confirmCurrent, correctFact, isConfirmedTaking, setMedicationStatus, endFact } from "./facts";
 import { buildState } from "./state";
-import { buildIndicatorView, findMatchingResult } from "./series";
+import { buildIndicatorView, findMatchingResult, listIndicators } from "./series";
+import { retrieveFacts } from "./retrieval";
+import { normalizeIndicator } from "../indicators";
 import { parseTranscript } from "./transcript";
 import { buildLlmRequest, SYSTEM_INSTRUCTIONS } from "./llm-request";
 
@@ -54,6 +56,44 @@ describe("lab values", () => {
     expect(seriesKey("alt", "Ед/л", null)).not.toBe(seriesKey("alt", "мккат/л", null));
     expect(seriesKey("alt", "Ед/л", "кинетический")).not.toBe(seriesKey("alt", "Ед/л", "другой"));
     expect(seriesKey("alt", "Ед/л", null)).toBe(seriesKey("alt", "ед/л", null));
+  });
+});
+
+describe("indicators", () => {
+  const anyLab = (id: string, rawName: string, raw: string, ref: string | null) =>
+    fact({ id, type: "lab_result", label: `${rawName} ${raw}`, value: { kind: "lab_result", rawName, indicator: null, value: parseLabValue(raw), unit: null, reference: parseReference(ref), method: null, origin: "lab_report", linkedResultId: null }, documentDate: "2026-01-10" });
+
+  it("recognizes common lab names, including an abbreviation in brackets", () => {
+    expect(normalizeIndicator("Гемоглобин (HGB)")).toBe("hgb");
+    expect(normalizeIndicator("С-реактивный белок")).toBe("crp");
+    expect(normalizeIndicator("Железо сывороточное")).toBe("iron");
+    expect(normalizeIndicator("Витамин B12")).toBe("b12");
+    expect(normalizeIndicator("Гликированный гемоглобин (HbA1c)")).toBe("hba1c");
+    expect(normalizeIndicator("Неизвестный маркер")).toBeNull();
+  });
+
+  it("lists and charts lab results even when the name is not in the catalog", () => {
+    const facts = [anyLab("a", "СРБ", "7,1", "<5"), anyLab("b", "Неизвестный маркер", "3", null)];
+    const codes = listIndicators(facts).map((i) => i.code);
+    expect(codes).toContain("crp");
+    expect(codes).toContain("raw:неизвестный маркер");
+    expect(buildIndicatorView(facts, "raw:неизвестный маркер")!.rows).toHaveLength(1);
+  });
+
+  it("reads references written with < or > and flags values outside them", () => {
+    expect(parseReference("‹ 5,2")).toMatchObject({ high: 5.2, low: null });
+    const v = buildIndicatorView([anyLab("c", "Холестерин общий", "6,4", "< 5,2")], "chol")!;
+    expect(v.rows[0].flag).toBe("high");
+    // A reference stored unparsed earlier is read again from its text.
+    const old = anyLab("d", "Холестерин общий", "6,4", null);
+    if (old.value.kind === "lab_result") old.value.reference = { raw: "‹ 5,2", low: null, high: null };
+    expect(buildIndicatorView([old], "chol")!.rows[0]).toMatchObject({ flag: "high", reference: "< 5,2" });
+  });
+
+  it("finds lab results for the chat by name", () => {
+    const facts = [anyLab("a", "С-реактивный белок", "7,1", "<5"), anyLab("b", "Неизвестный маркер", "3", null)];
+    expect(retrieveFacts("Как менялся СРБ?", facts).facts.map((f) => f.fact.id)).toEqual(["a"]);
+    expect(retrieveFacts("Что с маркером неизвестный?", facts).facts.map((f) => f.fact.id)).toContain("b");
   });
 });
 

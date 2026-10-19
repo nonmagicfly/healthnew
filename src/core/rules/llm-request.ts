@@ -16,6 +16,11 @@ export function escapeUntrusted(s: string): string {
   return s.replace(/</g, "‹").replace(/>/g, "›");
 }
 
+/** Undoes escapeUntrusted in text a model copied from the escaped document, so «< 5,2» reads as written. */
+export function unescapeModelText(s: string): string {
+  return s.replace(/‹/g, "<").replace(/›/g, ">");
+}
+
 function factLine(f: Fact): string {
   const src = f.sources[0];
   const speaker = src?.speaker ? `; говорит: ${src.speaker}` : "";
@@ -100,7 +105,7 @@ export function validateAnswer(raw: RawAnswer, facts: Fact[]): { segments: Answe
     .map((s) => {
       const fs = [...new Set(s.factIds)].map((id) => byId.get(id)).filter((f): f is Fact => !!f);
       const sourced = s.kind === "document_fact" || s.kind === "patient_words";
-      return { kind: sourced && !fs.length ? "summary" : s.kind, text: s.text.trim(), factIds: fs.map((f) => f.id), sources: fs.map((f) => f.sources[0]) };
+      return { kind: sourced && !fs.length ? "summary" : s.kind, text: unescapeModelText(s.text.trim()), factIds: fs.map((f) => f.id), sources: fs.map((f) => f.sources[0]) };
     });
   const used = [...new Set(segments.flatMap((s) => s.factIds))];
   const unconfirmedMed = used.some((id) => {
