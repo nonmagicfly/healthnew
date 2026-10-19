@@ -144,4 +144,19 @@ describe("lab form parser", () => {
     expect(iron).toHaveLength(1);
     expect(iron[0].sources.map((s) => s.documentId).sort()).toEqual([a, b].sort());
   });
+
+  it("applies a bulk-uploaded form without a review card, but leaves another person's form for review", async () => {
+    const { service, repo } = await createTestService();
+    const up = (name: string, text: string[]) => service.upload("me", { fileName: name, mime: "text/plain", bytes: new TextEncoder().encode(text.join("\n")), kind: "lab_report" });
+    const first = await up("бланк-1.txt", FORM("ТЕСТОВ", "01.03.2026"));
+    const r1 = await service.autoApply("me", first.document.id);
+    expect(r1).toMatchObject({ applied: true, document: { status: "applied" } });
+    expect(r1.added).toBe((await repo.listFacts("me")).length);
+    expect(r1.added).toBeGreaterThan(5);
+
+    const other = await up("бланк-2.txt", FORM("ДРУГОВА", "02.03.2026"));
+    const r2 = await service.autoApply("me", other.document.id);
+    expect(r2).toMatchObject({ applied: false, document: { status: "review_pending" } });
+    expect(r2.reason).toContain("другого человека");
+  });
 });

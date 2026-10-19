@@ -57,7 +57,15 @@ function Samples() {
   );
 }
 
-type BatchRow = { name: string; status: "waiting" | "uploading" | "uploaded" | "duplicate" | "error" | "extracting" | "extracted" | "extract_error"; doc: SourceDocument | null; message: string | null };
+type BatchRow = {
+  name: string;
+  status: "waiting" | "uploading" | "uploaded" | "duplicate" | "error" | "extracting" | "extracted" | "extract_error" | "applying" | "applied" | "needs_review";
+  doc: SourceDocument | null;
+  message: string | null;
+  added?: number;
+  decisions?: number;
+};
+type AutoApplied = { document: SourceDocument; applied: boolean; added: number; decisions: number; reason: string | null };
 
 const BATCH_STATUS: Record<BatchRow["status"], string> = {
   waiting: "в очереди",
@@ -68,6 +76,9 @@ const BATCH_STATUS: Record<BatchRow["status"], string> = {
   extracting: "модель читает…",
   extracted: "факты предложены, проверьте",
   extract_error: "ошибка извлечения",
+  applying: "добавляю в историю…",
+  applied: "добавлен в историю",
+  needs_review: "нужна ваша проверка",
 };
 
 const SENDABLE_AFTER_UPLOAD: SourceDocument["status"][] = ["extraction_ready", "extraction_unavailable", "recognition_unavailable", "error"];
@@ -80,6 +91,17 @@ function Upload() {
   const [agreed, setAgreed] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const setRow = (i: number, patch: Partial<BatchRow>) => setBatch((rows) => rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+
+  // Bulk upload adds what was found right away; changes to the current state and questions wait for the user.
+  const autoApply = async (i: number, doc: SourceDocument) => {
+    setRow(i, { status: "applying" });
+    try {
+      const r = await api<AutoApplied>(`${base}/documents/${doc.id}/auto-apply`, { method: "POST" });
+      setRow(i, { status: r.applied ? "applied" : "needs_review", doc: r.document, added: r.added, decisions: r.decisions, message: r.reason });
+    } catch (err) {
+      setRow(i, { status: "needs_review", message: (err as Error).message });
+    }
+  };
 
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -113,6 +135,7 @@ function Upload() {
       try {
         const r = await api<{ document: SourceDocument; duplicate: boolean }>(`${base}/documents`, { method: "POST", body: form });
         setRow(i, { status: r.duplicate ? "duplicate" : "uploaded", doc: r.document });
+        if (!r.duplicate && r.document.status === "review_pending" && !r.document.sampleKey) await autoApply(i, r.document);
       } catch (err) {
         setRow(i, { status: "error", message: (err as Error).message });
       }
@@ -130,6 +153,7 @@ function Upload() {
       try {
         await api(`${base}/documents/${r.doc!.id}/extract`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ consent: true }) });
         setRow(i, { status: "extracted" });
+        await autoApply(i, r.doc!);
       } catch (err) {
         setRow(i, { status: "extract_error", message: (err as Error).message });
       }
@@ -193,15 +217,21 @@ function Upload() {
                 ) : (
                   <span>{r.name}</span>
                 )}
-                <Badge tone={r.status === "error" || r.status === "extract_error" ? "red" : r.status === "extracted" || r.status === "uploaded" ? "green" : "slate"}>{BATCH_STATUS[r.status]}</Badge>
-                {r.message && <span className="text-red-700">{r.message}</span>}
+                <Badge tone={r.status === "error" || r.status === "extract_error" ? "red" : r.status === "needs_review" ? "amber" : r.status === "applied" || r.status === "extracted" || r.status === "uploaded" ? "green" : "slate"}>{BATCH_STATUS[r.status]}</Badge>
+                {r.status === "applied" && (
+                  <span className="text-slate-600">
+                    новых фактов: {r.added}
+                    {r.decisions ? `, ждут решения: ${r.decisions}` : ""}
+                  </span>
+                )}
+                {r.message && <span className={r.status === "needs_review" ? "text-amber-800" : "text-red-700"}>{r.message}</span>}
               </li>
             ))}
           </ul>
           {liveModel && sendable.length > 0 && !state.busy && (
             <div className="mt-3 rounded bg-slate-50 p-2">
               <p>
-                Можно сразу извлечь факты из загруженных документов: текст каждого (а для PDF без текстового слоя сам файл) будет отправлен в {liveModel.provider}, модель {liveModel.model}. Модель только предлагает факты, решение по каждому документу за вами.
+                Можно сразу извлечь факты из загруженных документов: текст каждого (а для PDF без текстового слоя сам файл) будет отправлен в {liveModel.provider}, модель {liveModel.model}. Найденные факты сразу добавятся в историю с пометкой «не проверено»; что вы принимаете сейчас и что актуально, решаете вы.
               </p>
               <label className="mt-2 flex items-start gap-2">
                 <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} className="mt-1" />
@@ -214,12 +244,36 @@ function Upload() {
               </button>
             </div>
           )}
-          {batch.some((r) => r.status === "extracted") && !state.busy && (
-            <p className="mt-2 text-slate-600">Откройте каждый документ по ссылке, чтобы проверить и применить предложенные факты.</p>
-          )}
+          {!state.busy && <BatchSummary rows={batch} />}
         </div>
       )}
     </Card>
+  );
+}
+
+/** Result of a bulk upload: what was added and what waits for the user's decision. */
+function BatchSummary({ rows }: { rows: BatchRow[] }) {
+  const applied = rows.filter((r) => r.status === "applied");
+  if (!applied.length && !rows.some((r) => r.status === "needs_review")) return null;
+  const added = applied.reduce((n, r) => n + (r.added ?? 0), 0);
+  const decisions = applied.reduce((n, r) => n + (r.decisions ?? 0), 0);
+  const review = rows.filter((r) => r.status === "needs_review");
+  return (
+    <div role="status" className="mt-3 rounded bg-teal-50 p-2 text-teal-900">
+      <p>
+        Добавлено в историю: документов {applied.length}, новых фактов {added}. Факты помечены «не проверено»: их можно проверить и исправить в карточке документа.
+      </p>
+      {decisions > 0 && (
+        <p className="mt-1">
+          Ждут вашего решения: {decisions} (что принимаете сейчас, что актуально, вопросы). Они в разделе{" "}
+          <Link href="/" className="underline">
+            «Моё состояние»
+          </Link>
+          .
+        </p>
+      )}
+      {review.length > 0 && <p className="mt-1">Не добавлены автоматически: {review.map((r) => r.name).join(", ")}. Откройте их по ссылке выше.</p>}
+    </div>
   );
 }
 

@@ -375,7 +375,7 @@ export class HealthService {
 
   /** Proposal from the local lab-form parser, or null when the layout is not recognized. */
   private async labFormProposal(doc: SourceDocument, versions: ContentVersion[]): Promise<Proposal | null> {
-    const text = versions.find((v) => v.method === "pdf_text_layer" || v.method === "plain_text");
+    const text = versions.find((v) => v.method === "pdf_text_layer" || v.method === "plain_text" || v.method === "transcript_parser");
     const parsed = text ? parseLabForm(text.pages) : null;
     if (!parsed) return null;
     const proposal = proposalFromExtraction(doc, versions, parsed, null, "parser");
@@ -611,6 +611,29 @@ export class HealthService {
     await this.d.repo.saveDocument(updated);
     await this.fillFormDates(updated);
     return this.getDocument(profileId, documentId);
+  }
+
+  /**
+   * Applies a document's proposal without a review card, for bulk upload. Facts are added unverified as always;
+   * changes to the current state are not accepted and clarifications stay open, so they wait for the user's decision.
+   * A form printed for another person is left for manual review.
+   */
+  async autoApply(profileId: string, documentId: string): Promise<{ document: SourceDocument; applied: boolean; added: number; decisions: number; reason: string | null }> {
+    const doc = await this.d.repo.getDocument(profileId, documentId);
+    if (!doc) throw new NotFoundError("Документ не найден");
+    const proposal = await this.d.repo.getProposal(profileId, documentId);
+    if (doc.status !== "review_pending" || !proposal) return { document: doc, applied: false, added: 0, decisions: 0, reason: "Нечего применять: фактов не предложено." };
+    if (proposal.items.some((i) => i.key === `llm:${documentId}:patient`))
+      return { document: doc, applied: false, added: 0, decisions: 1, reason: "Бланк выписан на другого человека: откройте документ и решите, относится ли он к профилю." };
+    const before = new Set((await this.d.repo.listFacts(profileId)).map((f) => f.id));
+    const result = await this.applyProposal(profileId, documentId, { acceptedStateChanges: [], postponedClarifications: [] });
+    return {
+      document: result.document,
+      applied: true,
+      added: result.facts.filter((f) => !before.has(f.id)).length,
+      decisions: proposal.items.filter((i) => i.group !== "history").length,
+      reason: null,
+    };
   }
 
   /** Sets or clears the document date; facts from this document that carried the old date get the new one. */
