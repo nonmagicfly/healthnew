@@ -42,7 +42,8 @@ import { buildTimeline, groupTimeline } from "./rules/timeline";
 import { retrieveFacts } from "./rules/retrieval";
 import { buildLlmRequest } from "./rules/llm-request";
 import { exactDate, unknownDate } from "./rules/dates";
-import { parseLabValue } from "./rules/lab-values";
+import { normalizeUnit, parseLabValue } from "./rules/lab-values";
+import { indicatorOf } from "./indicators";
 import { contentKey, normalizeIsoDate, proposalFromExtraction } from "./rules/extraction";
 import { parseLabForm } from "./rules/lab-form";
 
@@ -71,6 +72,11 @@ export const DEFAULT_PROFILES: Profile[] = [
 
 const ALLOWED_MIME = new Set(["application/pdf", "text/plain", "text/markdown"]);
 const MAX_SIZE = 25 * 1024 * 1024;
+
+/** Text of a document with whitespace collapsed, for spotting the same document saved as another file. */
+function sameText(pages: string[]): string {
+  return pages.join("\n").replace(/\s+/g, " ").trim();
+}
 
 export async function sha256Hex(bytes: Uint8Array): Promise<string> {
   const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes as BufferSource);
@@ -209,7 +215,6 @@ export class HealthService {
     const existing = (await this.d.repo.listDocuments(profileId)).find((d) => d.original?.sha256 === sha256);
     if (existing) return { document: await this.fillFormDates(existing), duplicate: true };
 
-    await this.d.files.put(sha256, input.bytes);
     const kind = input.kind ?? (mime === "application/pdf" ? "other" : "transcript");
     const doc: SourceDocument = {
       id: this.d.ids.next("doc"),
@@ -228,8 +233,18 @@ export class HealthService {
       statusMessage: null,
       createdAt: this.now(),
     };
+    // The same document saved again as another file (a re-download, a copy) has the same text: it is not stored twice.
+    const rec = await this.d.recognizer.recognize({ document: doc, bytes: input.bytes });
+    const text = rec.ok ? sameText(rec.version.pages) : "";
+    if (text.length >= 50) {
+      for (const other of await this.d.repo.listDocuments(profileId)) {
+        const versions = await this.d.repo.listVersions(profileId, other.id);
+        if (versions.some((v) => sameText(v.pages) === text)) return { document: await this.fillFormDates(other), duplicate: true };
+      }
+    }
+    await this.d.files.put(sha256, input.bytes);
     await this.d.repo.saveDocument(doc);
-    const processed = await this.process(doc, input.bytes);
+    const processed = await this.process(doc, input.bytes, rec);
     await this.fillAllFormDates(profileId);
     return { document: processed, duplicate: false };
   }
@@ -310,7 +325,7 @@ export class HealthService {
     await this.d.repo.saveVersion({ ...v, id: this.d.ids.next("ver"), profileId: doc.profileId, documentId: doc.id, createdAt: this.now() });
   }
 
-  private async process(doc: SourceDocument, bytes: Uint8Array | null): Promise<SourceDocument> {
+  private async process(doc: SourceDocument, bytes: Uint8Array | null, recognized?: Awaited<ReturnType<Deps["recognizer"]["recognize"]>>): Promise<SourceDocument> {
     let current = doc;
     const setStatus = async (status: SourceDocument["status"], statusMessage: string | null) => {
       current = { ...current, status, statusMessage };
@@ -318,7 +333,7 @@ export class HealthService {
     };
     try {
       if (bytes) {
-        const rec = await this.d.recognizer.recognize({ document: doc, bytes });
+        const rec = recognized ?? (await this.d.recognizer.recognize({ document: doc, bytes }));
         if (rec.ok) {
           await this.saveVersion(doc, rec.version);
           await setStatus("recognized", null);
@@ -514,10 +529,22 @@ export class HealthService {
     for (const f of facts) {
       if ((f.extraction.method === "llm" || f.extraction.method === "parser") && f.sources.some((s) => s.documentId === documentId) && !byKey.has(llmKey(f))) byKey.set(llmKey(f), f);
     }
+    // One measurement printed in several forms (a panel and its separate blank, a re-issued form) is one fact with several sources.
+    const measurementKey = (f: Pick<Fact, "value" | "eventDate">) =>
+      f.value.kind === "lab_result" && f.value.origin === "lab_report" && f.eventDate.kind === "exact"
+        ? `${indicatorOf(f.value)}|${f.eventDate.date}|${f.value.value.raw.replace(/\s+/g, "").replace(",", ".")}|${normalizeUnit(f.value.unit)}`
+        : null;
+    const byMeasurement = new Map<string, Fact>();
+    for (const f of facts) {
+      const k = measurementKey(f);
+      if (k && f.verification !== "rejected" && !byMeasurement.has(k)) byMeasurement.set(k, f);
+    }
     const touched = new Map<string, Fact>();
 
     const materialize = (draft: FactDraft): Fact => {
-      const prev = touched.get(draft.dedupKey) ?? byKey.get(draft.dedupKey);
+      const mk = measurementKey(draft);
+      const sameMeasurement = mk ? byMeasurement.get(mk) : undefined;
+      const prev = touched.get(draft.dedupKey) ?? byKey.get(draft.dedupKey) ?? (sameMeasurement && (touched.get(sameMeasurement.dedupKey) ?? sameMeasurement));
       if (prev) {
         let f = prev;
         for (const s of draft.sources) f = addSource(f, s, at);

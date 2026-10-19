@@ -150,7 +150,7 @@ test("arbitrary upload is stored honestly, duplicates and errors are explained",
 
   await page.goto("/documents");
   await page.getByLabel(/Файл \(PDF/).setInputFiles(file);
-  await expect(page.getByText(/Этот файл уже был загружен/)).toBeVisible();
+  await expect(page.getByText(/Этот документ уже был загружен/)).toBeVisible();
 
   await page.goto("/documents");
   await page.getByLabel(/Файл \(PDF/).setInputFiles({ name: "empty.txt", mimeType: "text/plain", buffer: Buffer.from("") });

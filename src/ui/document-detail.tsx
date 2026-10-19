@@ -401,7 +401,7 @@ export function DocumentDetailView() {
         </div>
         {search.get("duplicate") && (
           <p role="status" className="mt-2 rounded bg-sky-50 p-2 text-sm text-sky-900">
-            Этот файл уже был загружен. Открыт существующий документ, дубль не создан.
+            Этот документ уже был загружен (тот же файл или копия с тем же текстом). Открыт существующий документ, дубль не создан.
           </p>
         )}
         {d.preparedNotice && <p className="mt-2 rounded bg-amber-50 p-2 text-sm text-amber-900">{d.preparedNotice}</p>}

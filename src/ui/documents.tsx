@@ -94,7 +94,7 @@ function Upload() {
       try {
         const r = await api<{ document: SourceDocument; duplicate: boolean }>(`${base}/documents`, { method: "POST", body: form });
         bump();
-        if (r.duplicate) setState({ busy: false, error: null, info: "Этот файл уже загружен. Открываю существующий документ." });
+        if (r.duplicate) setState({ busy: false, error: null, info: "Этот документ уже загружен. Открываю существующий документ." });
         router.push(`/documents/${r.document.id}${r.duplicate ? "?duplicate=1" : ""}`);
       } catch (err) {
         setState({ busy: false, error: (err as Error).message, info: null });

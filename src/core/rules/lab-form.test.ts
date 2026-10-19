@@ -121,4 +121,27 @@ describe("lab form parser", () => {
     expect(await repo.getDocument("me", document.id)).toMatchObject({ documentDate: "2026-02-10" });
     expect((await repo.listFacts("me")).find((f) => f.id === "fact_x")).toMatchObject({ eventDate: { kind: "exact", date: "2026-02-10" }, documentDate: "2026-02-10" });
   });
+
+  it("does not store the same form twice when it comes as another file", async () => {
+    const { service } = await createTestService();
+    const text = FORM("ТЕСТОВ", "01.03.2026").join("\n");
+    const first = await service.upload("me", { fileName: "бланк.txt", mime: "text/plain", bytes: new TextEncoder().encode(text), kind: "lab_report" });
+    const copy = await service.upload("me", { fileName: "бланк (1).txt", mime: "text/plain", bytes: new TextEncoder().encode(text + "\n\n"), kind: "lab_report" });
+    expect(copy).toMatchObject({ duplicate: true, document: { id: first.document.id } });
+    expect((await service.listDocuments("me")).length).toBe(1);
+  });
+
+  it("keeps one result when the same measurement is printed in two forms", async () => {
+    const { service, repo } = await createTestService();
+    const apply = async (name: string, text: string[]) => {
+      const { document } = await service.upload("me", { fileName: name, mime: "text/plain", bytes: new TextEncoder().encode(text.join("\n")), kind: "lab_report" });
+      await service.applyProposal("me", document.id, { acceptedStateChanges: [], postponedClarifications: [] });
+      return document.id;
+    };
+    const a = await apply("панель.txt", FORM("ТЕСТОВ", "01.03.2026"));
+    const b = await apply("железо.txt", [`ТЕСТОВФамилия: Дата: 01.03.2026\nНаименование исследования Результат Ед. изм. Нормальные значенияФлаг\nЖелезо мкмоль/л 9.0-21.5↑ 24.1`]);
+    const iron = (await repo.listFacts("me")).filter((f) => f.label.startsWith("Железо"));
+    expect(iron).toHaveLength(1);
+    expect(iron[0].sources.map((s) => s.documentId).sort()).toEqual([a, b].sort());
+  });
 });
