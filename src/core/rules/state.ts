@@ -67,10 +67,9 @@ function medicationItems(meds: Fact[], state: HealthState) {
     const taking = byDate.filter(isConfirmedTaking).at(-1);
     const stopped = byDate.filter((f) => f.value.kind === "medication" && f.value.status === "stopped").at(-1);
     if (taking && taking.value.kind === "medication") {
-      const since = taking.validity.confirmedAt?.slice(0, 10) ?? factDate(taking);
       const stoppedAt = stopped ? factDate(stopped) : null;
-      // A later document saying it was stopped does not change what you confirmed; it is shown so you can check.
-      const warn = stoppedAt && (!since || stoppedAt >= since) ? `; в документе от ${ru(stoppedAt)} отмечена отмена, проверьте` : "";
+      // A document saying it was stopped does not change what you confirmed; the contradiction is shown so you can check.
+      const warn = stopped ? `; противоречие: ${stoppedAt ? `в документе от ${ru(stoppedAt)}` : "в документе"} отмечена отмена, проверьте` : "";
       state.takingMedications.push({ ...item(taking, MEDICATION_STATUS_LABEL[taking.value.status] + more + warn), documentIds: docs });
       continue;
     }

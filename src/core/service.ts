@@ -475,7 +475,10 @@ export class HealthService {
     // A document uploaded as "other" takes its kind from the event it records.
     const ENC_KIND = { visit: "consultation", lab: "lab_report", examination: "examination" } as const;
     const kind = doc.kind === "other" && proposal.encounter ? ENC_KIND[proposal.encounter.kind] : doc.kind;
-    const updated: SourceDocument = { ...doc, kind, status: "applied", statusMessage: null, encounterId, documentDate: doc.documentDate ?? proposal.documentDate ?? null };
+    // A title that is just the file name is replaced by the name of the event the document records.
+    const fileTitle = doc.original ? doc.original.fileName.replace(/\.[^.]+$/, "") : null;
+    const title = proposal.encounter && doc.title === fileTitle ? proposal.encounter.title : doc.title;
+    const updated: SourceDocument = { ...doc, kind, title, status: "applied", statusMessage: null, encounterId, documentDate: doc.documentDate ?? proposal.documentDate ?? null };
     await this.d.repo.saveDocument(updated);
     return this.getDocument(profileId, documentId);
   }

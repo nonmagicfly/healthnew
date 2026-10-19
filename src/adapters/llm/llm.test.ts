@@ -119,7 +119,8 @@ describe("extraction with a connected model", () => {
     expect(proposal!.encounter).toMatchObject({ title: "Приём терапевта", date: { kind: "exact", date: "2025-03-01" } });
 
     // Applying works like any other proposal; nothing is confirmed without the user.
-    await service.applyProposal("me", document.id, { acceptedStateChanges: [], postponedClarifications: [] });
+    const applied = await service.applyProposal("me", document.id, { acceptedStateChanges: [], postponedClarifications: [] });
+    expect(applied.document.title).toBe("Приём терапевта");
     const state = await service.state("me");
     expect(state.takingMedications).toHaveLength(0);
   });

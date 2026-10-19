@@ -150,7 +150,7 @@ describe("state", () => {
     const s = buildState([taking, med("b", "d2", "prescribed", "2026-02-01"), med("c", "d3", "stopped", "2026-03-01")]);
     expect(s.takingMedications).toHaveLength(1);
     expect(s.takingMedications[0].documentIds).toEqual(["d1", "d2", "d3"]);
-    expect(s.takingMedications[0].detail).toMatch(/отмечена отмена/);
+    expect(s.takingMedications[0].detail).toMatch(/противоречие: в документе от 01\.03\.2026 отмечена отмена/);
     expect(s.otherMedications).toHaveLength(0);
     // Prescribed and later stopped, never confirmed: not listed at all.
     expect(buildState([med("x", "d1", "prescribed", "2026-01-10"), med("y", "d2", "stopped", "2026-03-01")]).otherMedications).toHaveLength(0);
