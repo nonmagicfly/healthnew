@@ -14,7 +14,7 @@ const NAV = [
 ];
 
 function Header() {
-  const { profiles, profile, setProfileId } = useProfile();
+  const { profiles, profile, setProfileId, liveModel } = useProfile();
   const path = usePathname();
   const active = (href: string) => (href === "/" ? path === "/" : path.startsWith(href));
   return (
@@ -56,7 +56,9 @@ function Header() {
           {profile?.isDemo ? (
             <strong>Демо-профиль: синтетические данные. </strong>
           ) : null}
-          Прототип в демонстрационном режиме: разбор документов подготовлен заранее только для встроенных примеров, ответы чата собираются по шаблону, LLM и OCR не подключены. Данные хранятся только на этом компьютере.
+          {liveModel
+            ? `Подключена модель ${liveModel.provider} (${liveModel.model}). Документы и вопросы отправляются ей только по вашему явному действию; остальные данные хранятся только на этом компьютере.`
+            : "Прототип в демонстрационном режиме: разбор документов подготовлен заранее только для встроенных примеров, ответы чата собираются по шаблону, LLM и OCR не подключены. Данные хранятся только на этом компьютере."}
         </p>
       </div>
     </header>

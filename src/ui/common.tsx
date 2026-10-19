@@ -105,6 +105,7 @@ export const STATUS_LABEL: Record<string, { text: string; tone: "slate" | "green
   recognized: { text: "Текст распознан", tone: "blue" },
   recognition_unavailable: { text: "Распознавание недоступно", tone: "amber" },
   extraction_unavailable: { text: "Извлечение не подключено", tone: "amber" },
+  extraction_ready: { text: "Можно извлечь факты", tone: "blue" },
   review_pending: { text: "Ожидает проверки", tone: "blue" },
   applied: { text: "Добавлен в историю", tone: "green" },
   error: { text: "Ошибка", tone: "red" },

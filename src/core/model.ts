@@ -34,6 +34,8 @@ export type ProcessingStatus =
   | "recognized"
   | "recognition_unavailable"
   | "extraction_unavailable"
+  /** Text is ready; facts can be extracted by a language model once the user agrees to send the document. */
+  | "extraction_ready"
   | "review_pending"
   | "applied"
   | "error";
@@ -240,7 +242,8 @@ export interface Fact {
   documentDate: ISODate | null;
   verification: Verification;
   validity: Validity;
-  extraction: { method: "prepared" | "parser" | "manual"; confidence: number | null };
+  /** model: which language model proposed the fact (method "llm"). */
+  extraction: { method: "prepared" | "parser" | "manual" | "llm"; confidence: number | null; model?: string | null };
   specialist: string | null;
   /** Health problem grouping, e.g. "ЖКТ", "Обмен железа". */
   problem: string | null;

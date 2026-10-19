@@ -61,9 +61,16 @@ export type ExtractionResult =
   | { ok: true; proposal: Proposal; method: "prepared" | "parser" | "llm" }
   | { ok: false; reason: "not_connected" | "failed"; message: string };
 
+export interface ExtractionInput {
+  document: SourceDocument;
+  versions: ContentVersion[];
+  /** Original bytes, for extractors that can read a file without a text layer (scans). */
+  original?: { bytes: Uint8Array; mime: string } | null;
+}
+
 /** Extracts structured facts from recognized content. */
 export interface FactExtractor {
-  extract(input: { document: SourceDocument; versions: ContentVersion[] }): Promise<ExtractionResult>;
+  extract(input: ExtractionInput): Promise<ExtractionResult>;
 }
 
 /**
@@ -86,6 +93,15 @@ export interface LlmAnswer {
 
 export interface LlmAdapter {
   answer(request: LlmRequest): Promise<LlmAnswer>;
+}
+
+/** A connected language model. Document content is sent to it only after the user agrees. */
+export interface LiveModel {
+  /** e.g. "OpenAI" or "Anthropic". Shown next to the consent button. */
+  provider: string;
+  model: string;
+  extractor: FactExtractor;
+  chat: LlmAdapter;
 }
 
 export interface SampleInfo {

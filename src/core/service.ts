@@ -19,6 +19,7 @@ import type {
   FactExtractor,
   FileStore,
   IdGenerator,
+  LiveModel,
   LlmAdapter,
   Repository,
   SampleCatalog,
@@ -43,6 +44,8 @@ import { parseLabValue } from "./rules/lab-values";
 
 export class NotFoundError extends Error {}
 export class ValidationError extends Error {}
+/** A connected model could not answer; the message is safe to show and has no document content. */
+export class ExternalServiceError extends Error {}
 
 export interface Deps {
   repo: Repository;
@@ -50,6 +53,8 @@ export interface Deps {
   recognizer: DocumentRecognizer;
   extractor: FactExtractor;
   llm: LlmAdapter;
+  /** Connected language model; null when no API key is configured (demo mode only). */
+  live?: LiveModel | null;
   samples: SampleCatalog;
   clock: Clock;
   ids: IdGenerator;
@@ -317,6 +322,11 @@ export class HealthService {
       }
       const versions = await this.d.repo.listVersions(doc.profileId, doc.id);
       const ex = await this.d.extractor.extract({ document: current, versions });
+      if (!ex.ok && ex.reason === "not_connected" && this.d.live && !current.sampleKey) {
+        // Nothing is sent automatically: the user decides per document.
+        await setStatus("extraction_ready", [current.status === "recognition_unavailable" ? current.statusMessage : null, this.readyMessage()].filter(Boolean).join(" "));
+        return current;
+      }
       if (!ex.ok) {
         await setStatus(
           current.status === "recognition_unavailable" ? "recognition_unavailable" : "extraction_unavailable",
@@ -331,6 +341,40 @@ export class HealthService {
       await setStatus("error", "Не удалось обработать документ. Оригинал сохранён.");
     }
     return current;
+  }
+
+  private readyMessage() {
+    return `Факты можно извлечь с помощью ${this.d.live!.provider} (${this.d.live!.model}). Документ будет отправлен только после вашего согласия.`;
+  }
+
+  /** The connected model, if any. */
+  liveModel(): { provider: string; model: string } | null {
+    return this.d.live ? { provider: this.d.live.provider, model: this.d.live.model } : null;
+  }
+
+  /**
+   * Sends one document to the connected model and stores its proposal for review.
+   * Requires explicit consent for this document; prepared examples are never sent.
+   */
+  async extractWithModel(profileId: string, documentId: string, consent: boolean): Promise<SourceDocument> {
+    const doc = await this.d.repo.getDocument(profileId, documentId);
+    if (!doc) throw new NotFoundError("Документ не найден");
+    if (!this.d.live) throw new ValidationError("Модель не подключена: укажите ключ API в .env.local.");
+    if (!consent) throw new ValidationError("Нужно согласие на отправку документа.");
+    if (doc.sampleKey) throw new ValidationError("У примера уже есть подготовленный разбор; он не отправляется модели.");
+    if (doc.status === "review_pending" || doc.status === "applied") throw new ValidationError("Факты этого документа уже извлечены.");
+    const versions = await this.d.repo.listVersions(profileId, documentId);
+    const bytes = doc.original ? await this.d.files.get(doc.original.sha256) : null;
+    const ex = await this.d.live.extractor.extract({ document: doc, versions, original: bytes && doc.original ? { bytes, mime: doc.original.mime } : null });
+    if (!ex.ok) {
+      const failed: SourceDocument = { ...doc, status: "extraction_ready", statusMessage: `${ex.message} Оригинал сохранён; можно попробовать ещё раз.` };
+      await this.d.repo.saveDocument(failed);
+      throw new ExternalServiceError(ex.message);
+    }
+    await this.d.repo.saveProposal(profileId, ex.proposal);
+    const updated: SourceDocument = { ...doc, status: "review_pending", statusMessage: null };
+    await this.d.repo.saveDocument(updated);
+    return updated;
   }
 
   /**
@@ -578,15 +622,22 @@ export class HealthService {
     return this.d.repo.listMessages(profileId);
   }
 
-  async ask(profileId: string, question: string): Promise<ChatMessage[]> {
+  /** useModel: the user agreed to send the question and the selected facts to the connected model. */
+  async ask(profileId: string, question: string, opts: { useModel?: boolean } = {}): Promise<ChatMessage[]> {
     await this.profile(profileId);
     const q = question.trim();
     if (!q) throw new ValidationError("Вопрос пустой");
+    if (opts.useModel && !this.d.live) throw new ValidationError("Модель не подключена: укажите ключ API в .env.local.");
     const facts = await this.d.repo.listFacts(profileId);
     const state = buildState(facts);
     const retrieval = retrieveFacts(q, facts);
     const request = buildLlmRequest(q, retrieval.facts.map((r) => r.fact), stateToText(state));
-    const answer = await this.d.llm.answer(request);
+    let answer;
+    try {
+      answer = await (opts.useModel ? this.d.live!.chat : this.d.llm).answer(request);
+    } catch (e) {
+      throw new ExternalServiceError(e instanceof Error && e.message ? e.message : "Модель не ответила.");
+    }
     const at = this.now();
     const userMsg: ChatMessage = { id: this.d.ids.next("msg"), profileId, role: "user", text: q, segments: [], usedContext: [], mode: null, createdAt: at };
     const reasons = new Map(retrieval.facts.map((r) => [r.fact.id, r.reason]));

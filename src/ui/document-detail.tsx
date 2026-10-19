@@ -240,7 +240,9 @@ function FactCard({ f, docId, focused }: { f: Fact; docId: string; focused: bool
       <p className="mt-0.5 text-xs text-slate-500">
         Дата события: {formatDateValue(f.eventDate)} · Дата документа: {formatIso(f.documentDate)} · Проверка:{" "}
         {{ unverified: "не проверено вами", confirmed: "подтверждено", corrected: "исправлено вами", rejected: "отклонено" }[f.verification]} · Извлечение:{" "}
-        {{ prepared: "подготовленный разбор", parser: "разбор текста", manual: "вручную" }[f.extraction.method]}
+        {f.extraction.method === "llm"
+          ? `модель ${f.extraction.model ?? ""}`.trim()
+          : { prepared: "подготовленный разбор", parser: "разбор текста", manual: "вручную" }[f.extraction.method]}
       </p>
       <SourceQuote f={f} docId={docId} />
       {f.type !== "clarification" && !editing && (
@@ -408,11 +410,14 @@ export function DocumentDetailView() {
         <SourcePane key={focusId ?? "none"} detail={detail.data} focusFact={focusFact} focusSegment={focusSegment} />
         <div className="space-y-4">
           {d.status === "review_pending" && detail.data.proposal && <ProposalCard detail={detail.data} onApplied={bump} />}
+          {canSendToModel(d) && <ModelExtract doc={d} onDone={bump} />}
           {d.status !== "review_pending" && (
             <Card title={`Извлечённые факты (${detail.data.facts.length})`}>
               {detail.data.facts.length === 0 ? (
                 <Empty>
-                  {d.status === "extraction_unavailable" || d.status === "recognition_unavailable"
+                  {d.status === "extraction_ready"
+                    ? "Факты ещё не извлечены. Оригинал сохранён; текст, если он есть, доступен слева."
+                    : d.status === "extraction_unavailable" || d.status === "recognition_unavailable"
                     ? "Извлечение фактов для этого файла не подключено. Оригинал сохранён; текст, если он есть, доступен слева."
                     : "Фактов нет."}
                 </Empty>
@@ -441,5 +446,47 @@ export function DocumentDetailView() {
         </div>
       </div>
     </div>
+  );
+}
+
+const SENDABLE: SourceDocument["status"][] = ["extraction_ready", "extraction_unavailable", "recognition_unavailable", "error"];
+
+function canSendToModel(d: SourceDocument) {
+  return !d.sampleKey && SENDABLE.includes(d.status);
+}
+
+/** Sends one document to the connected model, only after the user ticks the consent box. */
+function ModelExtract({ doc, onDone }: { doc: SourceDocument; onDone: () => void }) {
+  const { liveModel, base } = useProfile();
+  const [agreed, setAgreed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (!liveModel) return null;
+  const send = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await postJson(`${base}/documents/${doc.id}/extract`, { consent: true });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+      onDone();
+    }
+  };
+  return (
+    <Card title="Извлечь факты с помощью модели">
+      <p className="text-sm text-slate-700">
+        Текст документа (а для PDF без текстового слоя сам файл) будет отправлен в {liveModel.provider}, модель {liveModel.model}. Модель только предлагает факты: вы увидите их в карточке и решите, что добавить. Без вашего согласия ничего не отправляется.
+      </p>
+      <label className="mt-2 flex items-start gap-2 text-sm">
+        <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} className="mt-1" />
+        <span>Согласен отправить этот документ в {liveModel.provider}</span>
+      </label>
+      <button type="button" onClick={send} disabled={!agreed || busy} className="mt-2 rounded bg-teal-700 px-4 py-1.5 text-sm text-white disabled:opacity-50">
+        {busy ? "Модель читает документ…" : "Отправить и извлечь факты"}
+      </button>
+      {error && <p role="alert" className="mt-2 text-sm text-red-700">{error}</p>}
+    </Card>
   );
 }

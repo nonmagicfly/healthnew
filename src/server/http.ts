@@ -1,6 +1,6 @@
 import "server-only";
 import { connection } from "next/server";
-import { NotFoundError, ValidationError, type HealthService } from "@/core/service";
+import { ExternalServiceError, NotFoundError, ValidationError, type HealthService } from "@/core/service";
 import { getService } from "./container";
 
 /**
@@ -16,6 +16,7 @@ export async function handle(fn: (s: HealthService) => Promise<unknown>): Promis
   } catch (e) {
     if (e instanceof NotFoundError) return Response.json({ error: e.message }, { status: 404 });
     if (e instanceof ValidationError) return Response.json({ error: e.message }, { status: 400 });
+    if (e instanceof ExternalServiceError) return Response.json({ error: e.message }, { status: 502 });
     if (e instanceof SyntaxError) return Response.json({ error: "Некорректный запрос" }, { status: 400 });
     console.error("API error", e instanceof Error ? e.name : "unknown");
     return Response.json({ error: "Внутренняя ошибка. Данные не изменены." }, { status: 500 });

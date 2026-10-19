@@ -28,6 +28,7 @@ function Answer({ m }: { m: ChatMessage }) {
       <div className="flex items-center gap-2">
         <span className="text-sm font-semibold text-slate-800">Ответ</span>
         {m.mode === "demo" && <DemoBadge>Демонстрационный ответ: LLM не подключена</DemoBadge>}
+        {m.mode === "llm" && <Badge tone="blue">Ответ модели; ссылки проверены по вашим фактам</Badge>}
       </div>
       <ul className="space-y-1.5">
         {m.segments.map((s, i) => (
@@ -61,12 +62,14 @@ function Answer({ m }: { m: ChatMessage }) {
 }
 
 export function ChatPanel({ compact = false }: { compact?: boolean }) {
-  const { base, version, profile } = useProfile();
+  const { base, version, profile, liveModel } = useProfile();
   const history = useApi<ChatMessage[]>(`${base}/chat`, version);
   const [added, setAdded] = useState<ChatMessage[]>([]);
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Off by default: the question and found facts leave the computer only when the user turns this on.
+  const [useModel, setUseModel] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
 
   const loaded = history.data ?? [];
@@ -81,7 +84,7 @@ export function ChatPanel({ compact = false }: { compact?: boolean }) {
     setBusy(true);
     setError(null);
     try {
-      const fresh = await postJson<ChatMessage[]>(`${base}/chat`, { question });
+      const fresh = await postJson<ChatMessage[]>(`${base}/chat`, { question, useModel: useModel && !!liveModel });
       setAdded((m) => [...m, ...fresh]);
       setQ("");
     } catch (e) {
@@ -93,7 +96,7 @@ export function ChatPanel({ compact = false }: { compact?: boolean }) {
 
   const shown = compact ? messages.slice(-4) : messages;
   return (
-    <Card title="Чат" actions={<DemoBadge>Ответы по шаблону</DemoBadge>}>
+    <Card title="Чат" actions={useModel && liveModel ? <Badge tone="blue">{liveModel.provider}</Badge> : <DemoBadge>Ответы по шаблону</DemoBadge>}>
       <p className="mb-3 text-xs text-slate-500">
         Вопросы обрабатываются с учётом текущего состояния {profile?.isDemo ? "демо-профиля" : "вашего профиля"}. Назначения из прошлого не являются рекомендацией принимать препарат сейчас.
       </p>
@@ -141,6 +144,14 @@ export function ChatPanel({ compact = false }: { compact?: boolean }) {
           Спросить
         </button>
       </form>
+      {liveModel && (
+        <label className="mt-2 flex items-start gap-2 text-xs text-slate-600">
+          <input type="checkbox" checked={useModel} onChange={(e) => setUseModel(e.target.checked)} className="mt-0.5" />
+          <span>
+            Отвечать с помощью {liveModel.provider} ({liveModel.model}): вопрос, текущее состояние и найденные факты будут отправлены в {liveModel.provider}. Без отметки ответ собирается локально по шаблону.
+          </span>
+        </label>
+      )}
       {error && <p role="alert" className="mt-2 text-sm text-red-700">{error}</p>}
     </Card>
   );
