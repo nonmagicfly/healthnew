@@ -290,6 +290,8 @@ export interface ProposalItem {
 
 export interface Proposal {
   documentId: string;
+  /** Date printed on the document, proposed when the user did not enter one at upload. */
+  documentDate?: ISODate | null;
   encounter: Omit<Encounter, "id" | "profileId" | "documentIds"> & { key: string } | null;
   items: ProposalItem[];
 }

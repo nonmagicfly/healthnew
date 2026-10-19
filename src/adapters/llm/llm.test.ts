@@ -49,6 +49,7 @@ const TRANSCRIPT = [
 ].join("\n");
 
 const EXTRACTION: ExtractionOutput = {
+  documentDate: null,
   encounter: { kind: "visit", title: "Приём терапевта", date: { ...unknownDate, kind: "exact", date: "2025-03-01" }, specialist: "Терапевт" },
   items: [
     it0({ type: "lab_result", label: "Ферритин 250 нг/мл", quote: "Ферритин в прошлый раз был 250 нг/мл", lab: { name: "Ферритин", value: "250", unit: "нг/мл", reference: null, method: null, origin: "mention" } }),
@@ -121,6 +122,40 @@ describe("extraction with a connected model", () => {
     await service.applyProposal("me", document.id, { acceptedStateChanges: [], postponedClarifications: [] });
     const state = await service.state("me");
     expect(state.takingMedications).toHaveLength(0);
+  });
+
+  it("takes the printed document date, accepts DD.MM.YYYY and lets the user change it later", async () => {
+    const out: ExtractionOutput = {
+      documentDate: { ...unknownDate, kind: "exact", date: "07.04.2025" },
+      encounter: null,
+      items: [
+        it0({ type: "lab_result", label: "Ферритин 250 нг/мл", quote: "Ферритин в прошлый раз был 250 нг/мл", eventDate: { ...unknownDate, kind: "exact", date: "05.04.2025" }, lab: { name: "Ферритин", value: "250", unit: "нг/мл", reference: null, method: null, origin: "lab_report" } }),
+      ],
+    };
+    const { service, document } = await uploadTranscript(liveModel(new FakeModel(() => out)));
+    expect(document.documentDate).toBeNull();
+    await service.extractWithModel("me", document.id, true);
+    const { proposal } = await service.getDocument("me", document.id);
+    expect(proposal!.documentDate).toBe("2025-04-07");
+    expect(proposal!.items[0].draft).toMatchObject({ eventDate: { kind: "exact", date: "2025-04-05" }, documentDate: "2025-04-07" });
+
+    const applied = await service.applyProposal("me", document.id, { acceptedStateChanges: [], postponedClarifications: [] });
+    expect(applied.document.documentDate).toBe("2025-04-07");
+
+    const changed = await service.setDocumentDate("me", document.id, "08.04.2025");
+    expect(changed.document.documentDate).toBe("2025-04-08");
+    expect(changed.facts[0].documentDate).toBe("2025-04-08");
+    await expect(service.setDocumentDate("me", document.id, "2025-02-30")).rejects.toThrow(ValidationError);
+  });
+
+  it("does not replace a date the user entered at upload", async () => {
+    const out: ExtractionOutput = { ...EXTRACTION, documentDate: { ...unknownDate, kind: "exact", date: "2025-04-07" } };
+    const ctx = await createTestService({ live: liveModel(new FakeModel(() => out)) });
+    const { document } = await ctx.service.upload("me", { fileName: "разговор.txt", mime: "text/plain", bytes: new TextEncoder().encode(TRANSCRIPT), kind: "transcript", documentDate: "2025-03-01" });
+    await ctx.service.extractWithModel("me", document.id, true);
+    const { proposal } = await ctx.service.getDocument("me", document.id);
+    expect(proposal!.documentDate).toBeNull();
+    expect(proposal!.items[0].draft.documentDate).toBe("2025-03-01");
   });
 
   it("reports a model failure without losing the document", async () => {

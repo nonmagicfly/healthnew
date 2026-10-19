@@ -41,6 +41,7 @@ import { retrieveFacts } from "./rules/retrieval";
 import { buildLlmRequest } from "./rules/llm-request";
 import { exactDate, unknownDate } from "./rules/dates";
 import { parseLabValue } from "./rules/lab-values";
+import { normalizeIsoDate } from "./rules/extraction";
 
 export class NotFoundError extends Error {}
 export class ValidationError extends Error {}
@@ -464,8 +465,22 @@ export class HealthService {
 
     for (const f of touched.values()) await this.d.repo.saveFact(f);
     await this.linkMentions(profileId, at);
-    const updated: SourceDocument = { ...doc, status: "applied", statusMessage: null, encounterId };
+    const updated: SourceDocument = { ...doc, status: "applied", statusMessage: null, encounterId, documentDate: doc.documentDate ?? proposal.documentDate ?? null };
     await this.d.repo.saveDocument(updated);
+    return this.getDocument(profileId, documentId);
+  }
+
+  /** Sets or clears the document date; facts from this document that carried the old date get the new one. */
+  async setDocumentDate(profileId: string, documentId: string, date: string | null) {
+    const doc = await this.d.repo.getDocument(profileId, documentId);
+    if (!doc) throw new NotFoundError("Документ не найден");
+    const next = date ? normalizeIsoDate(date) : null;
+    if (next === undefined) throw new ValidationError("Дата должна быть в формате ГГГГ-ММ-ДД или ДД.ММ.ГГГГ");
+    const facts = await this.d.repo.listFacts(profileId);
+    for (const f of facts) {
+      if (f.sources.some((s) => s.documentId === documentId) && f.documentDate === doc.documentDate) await this.d.repo.saveFact({ ...f, documentDate: next });
+    }
+    await this.d.repo.saveDocument({ ...doc, documentDate: next });
     return this.getDocument(profileId, documentId);
   }
 

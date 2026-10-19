@@ -63,19 +63,35 @@ export interface ExtractedItem {
 }
 
 export interface ExtractionOutput {
+  /** The date printed on the document itself (issue, visit or report date). */
+  documentDate: ExtractedDate | null;
   encounter: { kind: "visit" | "lab" | "examination"; title: string; date: ExtractedDate; specialist: string | null } | null;
   items: ExtractedItem[];
 }
 
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
-const iso = (s: string | null) => (s && ISO.test(s) && !Number.isNaN(Date.parse(s)) ? s : undefined);
+const RU = /^(\d{1,2})\.(\d{1,2})\.(\d{4})$/;
+/** Accepts YYYY-MM-DD and the Russian DD.MM.YYYY form; anything else is not a date. */
+export function normalizeIsoDate(s: string | null | undefined): string | undefined {
+  const t = s?.trim();
+  if (!t) return undefined;
+  const ru = RU.exec(t);
+  const v = ru ? `${ru[3]}-${ru[2].padStart(2, "0")}-${ru[1].padStart(2, "0")}` : t;
+  if (!ISO.test(v)) return undefined;
+  const d = new Date(`${v}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === v ? v : undefined;
+}
+const iso = normalizeIsoDate;
 
 export function toDateValue(d: ExtractedDate): DateValue {
-  if (d.kind === "exact" && iso(d.date)) return { kind: "exact", date: d.date! };
+  const exact = iso(d.date);
+  if (d.kind === "exact" && exact) return { kind: "exact", date: exact };
   if (d.kind === "approx" && d.label?.trim()) return { kind: "approx", label: d.label.trim() };
   const v: DateValue = { kind: "unknown" };
-  if (iso(d.before)) v.before = d.before!;
-  if (iso(d.after)) v.after = d.after!;
+  const before = iso(d.before);
+  const after = iso(d.after);
+  if (before) v.before = before;
+  if (after) v.after = after;
   return v;
 }
 
@@ -135,6 +151,13 @@ const NO_TEXT = "Текст прочитан моделью из файла бе
 export function proposalFromExtraction(doc: SourceDocument, versions: ContentVersion[], out: ExtractionOutput, model: string): Proposal {
   const version = versions.find((v) => v.method !== "prepared");
   const keyOf = (i: number) => `llm:${doc.id}:${i}`;
+  // A date the user entered wins; otherwise the date printed on the document (or of the visit it records).
+  const exactOf = (d: ExtractedDate | null | undefined) => {
+    const v = d ? toDateValue(d) : null;
+    return v?.kind === "exact" ? v.date : null;
+  };
+  const printedDate = exactOf(out.documentDate) ?? exactOf(out.encounter?.date);
+  const documentDate = doc.documentDate ?? printedDate;
   const kept = out.items.map((it, i) => ({ it, i })).filter(({ it }) => it.label.trim() && it.quote.trim());
   const keptIdx = new Set(kept.map(({ i }) => i));
 
@@ -162,7 +185,7 @@ export function proposalFromExtraction(doc: SourceDocument, versions: ContentVer
       originalText: source.quote,
       sources: [source],
       eventDate,
-      documentDate: doc.documentDate,
+      documentDate,
       validity: validityFor(it.type, eventDate),
       extraction: { method: "llm", confidence: null, model },
       specialist: doc.specialist,
@@ -187,6 +210,7 @@ export function proposalFromExtraction(doc: SourceDocument, versions: ContentVer
   const enc = out.encounter;
   return {
     documentId: doc.id,
+    documentDate: doc.documentDate ? null : printedDate,
     encounter: enc && enc.title.trim() ? { key: `llm:${doc.id}:encounter`, kind: enc.kind, title: enc.title.trim(), date: toDateValue(enc.date), specialist: enc.specialist?.trim() || doc.specialist } : null,
     items,
   };

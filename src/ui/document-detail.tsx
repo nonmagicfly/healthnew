@@ -307,9 +307,16 @@ function ProposalCard({ detail, onApplied }: { detail: Detail; onApplied: () => 
     }
   };
 
+  const fromModel = items.some((i) => i.draft.extraction.method === "llm");
+  const proposedDate = detail.proposal!.documentDate;
 
   return (
-    <Card title="Что изменится после применения" actions={<DemoBadge>Подготовленный разбор</DemoBadge>}>
+    <Card title="Что изменится после применения" actions={fromModel ? <Badge tone="blue">Предложено моделью</Badge> : <DemoBadge>Подготовленный разбор</DemoBadge>}>
+      {proposedDate && (
+        <p className="mb-2 rounded bg-sky-50 p-2 text-sm text-sky-900">
+          Дата документа из текста: {formatIso(proposedDate)}. Она будет сохранена при применении; изменить её можно в заголовке документа.
+        </p>
+      )}
       <Section title={`Предлагается изменить текущее состояние (${group("state_change").length})`} hint="Изменится только то, что вы отметите. Без отметки сведение попадёт только в историю.">
         {group("state_change").map((i) => (
           <li key={i.key} className="rounded border border-teal-200 bg-teal-50/40 p-2 text-sm">
@@ -383,7 +390,7 @@ export function DocumentDetailView() {
         <h1 className="mt-1 text-xl font-semibold">{d.title}</h1>
         <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-600">
           <span>{DOC_KIND_LABEL[d.kind]}</span>
-          <span>Дата документа: {formatIso(d.documentDate)}</span>
+          <DocumentDate doc={d} onSaved={bump} />
           {d.specialist && <span>{d.specialist}</span>}
           <Badge tone={st.tone}>{st.text}</Badge>
           {d.isSynthetic && <DemoBadge>Синтетический документ</DemoBadge>}
@@ -488,5 +495,47 @@ function ModelExtract({ doc, onDone }: { doc: SourceDocument; onDone: () => void
       </button>
       {error && <p role="alert" className="mt-2 text-sm text-red-700">{error}</p>}
     </Card>
+  );
+}
+
+/** Shows the document date with an inline editor; facts from this document get the new date too. */
+function DocumentDate({ doc, onSaved }: { doc: SourceDocument; onSaved: () => void }) {
+  const { base } = useProfile();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(doc.documentDate ?? "");
+  const [error, setError] = useState<string | null>(null);
+  if (!editing) {
+    return (
+      <span>
+        Дата документа: {formatIso(doc.documentDate)}{" "}
+        {!doc.sampleKey && (
+          <button type="button" className="text-teal-800 underline" onClick={() => { setValue(doc.documentDate ?? ""); setEditing(true); }}>
+            {doc.documentDate ? "изменить" : "указать"}
+          </button>
+        )}
+      </span>
+    );
+  }
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    try {
+      await api(`${base}/documents/${doc.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ documentDate: value || null }) });
+      setEditing(false);
+      onSaved();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+  return (
+    <form onSubmit={save} className="flex items-center gap-2">
+      <label className="flex items-center gap-1">
+        Дата документа
+        <input type="date" value={value} onChange={(e) => setValue(e.target.value)} className="rounded border border-slate-300 px-1 py-0.5" />
+      </label>
+      <button type="submit" className="rounded bg-teal-700 px-2 py-0.5 text-white">Сохранить</button>
+      <button type="button" className="underline" onClick={() => setEditing(false)}>Отмена</button>
+      {error && <span role="alert" className="text-red-700">{error}</span>}
+    </form>
   );
 }
