@@ -1,0 +1,12 @@
+# Data, local settings and build output never go into the image.
+# The personal samples file (src/adapters/samples/personal.local.ts) is included when it exists,
+# so a locally built image shows your examples; the image is for this computer only, do not publish it.
+node_modules
+.next
+data
+.e2e-data
+.fixtures-data
+test-results
+playwright-report
+.env*
+.git
