@@ -90,6 +90,11 @@ describe("lab form parser", () => {
     for (const f of await repo.listFacts("me")) await repo.saveFact({ ...f, eventDate: { kind: "unknown" }, documentDate: null });
     await repo.saveDocument({ ...(await repo.getDocument("me", document.id))!, documentDate: null });
 
+    await service.fillAllFormDates();
+    expect((await repo.listFacts("me")).find((f) => f.label.startsWith("Железо"))).toMatchObject({ eventDate: { kind: "exact", date: "2026-03-01" } });
+    for (const f of await repo.listFacts("me")) await repo.saveFact({ ...f, eventDate: { kind: "unknown" }, documentDate: null });
+    await repo.saveDocument({ ...(await repo.getDocument("me", document.id))!, documentDate: null });
+
     const again = await service.upload("me", { fileName: "бланк.txt", mime: "text/plain", bytes });
     expect(again).toMatchObject({ duplicate: true, document: { documentDate: "2026-03-01" } });
     const iron = (await repo.listFacts("me")).find((f) => f.label.startsWith("Железо"))!;

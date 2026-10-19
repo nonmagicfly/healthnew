@@ -49,6 +49,8 @@ export function getService(): Promise<HealthService> {
       ids: { next: (p) => `${p}_${crypto.randomUUID().slice(0, 12)}` },
     });
     await service.ensureProfiles();
+    // Lab forms extracted before their printed date was read get it now; only empty dates are filled.
+    await service.fillAllFormDates().catch(() => undefined);
     return service;
   })();
   return g.__health;

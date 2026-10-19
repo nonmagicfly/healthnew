@@ -229,7 +229,9 @@ export class HealthService {
       createdAt: this.now(),
     };
     await this.d.repo.saveDocument(doc);
-    return { document: await this.process(doc, input.bytes), duplicate: false };
+    const processed = await this.process(doc, input.bytes);
+    await this.fillAllFormDates(profileId);
+    return { document: processed, duplicate: false };
   }
 
   /** Opens a built-in example. Synthetic examples are allowed only in the demo profile. */
@@ -396,18 +398,26 @@ export class HealthService {
     return proposal;
   }
 
+  /** Fills missing dates of every lab form already in the profiles; runs at startup and after each upload. */
+  async fillAllFormDates(profileId?: string) {
+    const profiles = profileId ? [profileId] : (await this.d.repo.listProfiles()).map((p) => p.id);
+    for (const pid of profiles) for (const doc of await this.d.repo.listDocuments(pid)) await this.fillFormDates(doc);
+  }
+
   /**
    * A lab form uploaded again fills the dates its facts are missing from the date printed in the form.
    * Only empty dates are filled, and never on facts the user corrected; values are not touched.
    */
   private async fillFormDates(doc: SourceDocument): Promise<SourceDocument> {
-    if (doc.sampleKey || doc.status !== "applied") return doc;
+    if (doc.sampleKey) return doc;
+    const facts = (await this.d.repo.listFacts(doc.profileId)).filter((f) => f.sources.some((s) => s.documentId === doc.id));
+    const undated = facts.some((f) => f.documentDate === null || (f.type === "lab_result" && f.eventDate.kind === "unknown"));
+    if (!undated && doc.documentDate) return doc;
     const proposal = await this.labFormProposal(doc, await this.d.repo.listVersions(doc.profileId, doc.id));
     const date = proposal?.documentDate;
     if (!date) return doc;
     const at = this.now();
-    for (const f of await this.d.repo.listFacts(doc.profileId)) {
-      if (!f.sources.some((s) => s.documentId === doc.id)) continue;
+    for (const f of facts) {
       const eventDate = f.type === "lab_result" ? ({ kind: "exact", date } as const) : ({ kind: "unknown" } as const);
       const next = fillMissingDates(f, eventDate, date, at);
       if (next !== f) await this.d.repo.saveFact(next);
