@@ -413,12 +413,18 @@ export class HealthService {
     const facts = (await this.d.repo.listFacts(doc.profileId)).filter((f) => f.sources.some((s) => s.documentId === doc.id));
     const undated = facts.some((f) => f.documentDate === null || (f.type === "lab_result" && f.eventDate.kind === "unknown"));
     if (!undated && doc.documentDate) return doc;
-    const proposal = await this.labFormProposal(doc, await this.d.repo.listVersions(doc.profileId, doc.id));
-    const date = proposal?.documentDate;
+    // The date printed in a known lab form wins; otherwise the date the earlier extraction found for the document or its visit.
+    const form = await this.labFormProposal(doc, await this.d.repo.listVersions(doc.profileId, doc.id));
+    const stored = await this.d.repo.getProposal(doc.profileId, doc.id);
+    const encounter = (await this.d.repo.listEncounters(doc.profileId)).find((e) => e.id === doc.encounterId) ?? stored?.encounter ?? null;
+    const encounterDate = encounter?.date.kind === "exact" ? encounter.date.date : null;
+    const date = form?.documentDate ?? doc.documentDate ?? stored?.documentDate ?? encounterDate;
     if (!date) return doc;
     const at = this.now();
     for (const f of facts) {
-      const eventDate = f.type === "lab_result" ? ({ kind: "exact", date } as const) : ({ kind: "unknown" } as const);
+      // A lab result was collected on the form's date, or on the date of a lab visit; a consultation's date says nothing about it.
+      const collected = form?.documentDate ?? (encounter?.kind === "lab" ? encounterDate : null);
+      const eventDate = f.type === "lab_result" && collected ? ({ kind: "exact", date: collected } as const) : ({ kind: "unknown" } as const);
       const next = fillMissingDates(f, eventDate, date, at);
       if (next !== f) await this.d.repo.saveFact(next);
     }
@@ -576,6 +582,7 @@ export class HealthService {
     const title = proposal.encounter && doc.title === fileTitle ? proposal.encounter.title : doc.title;
     const updated: SourceDocument = { ...doc, kind, title, status: "applied", statusMessage: null, encounterId, documentDate: doc.documentDate ?? proposal.documentDate ?? null };
     await this.d.repo.saveDocument(updated);
+    await this.fillFormDates(updated);
     return this.getDocument(profileId, documentId);
   }
 

@@ -105,4 +105,20 @@ describe("lab form parser", () => {
     expect(text).toContain("Железо сывороточное: 24.1 мкмоль/л (выше референса)");
     expect(text).not.toContain("Гемоглобин");
   });
+
+  it("fills missing dates of a model-extracted document from the date of its lab visit", async () => {
+    const { service, repo } = await createTestService();
+    const bytes = new TextEncoder().encode("Анализ крови без известного шаблона\nФерритин 30 мкг/л");
+    const { document } = await service.upload("me", { fileName: "анализ.txt", mime: "text/plain", bytes, kind: "lab_report" });
+    // The same file uploaded as a known form gives a fact to reuse; here it is attached to the unknown-layout document.
+    const form = await service.upload("me", { fileName: "бланк.txt", mime: "text/plain", bytes: new TextEncoder().encode(FORM("ТЕСТОВ", "01.03.2026").join("\n")), kind: "lab_report" });
+    const draft = (await service.getDocument("me", form.document.id)).proposal!.items.find((i) => i.draft.label.startsWith("Железо"))!.draft;
+    const src = { ...draft.sources[0], documentId: document.id };
+    await repo.saveFact({ ...draft, id: "fact_x", profileId: "me", sources: [src], eventDate: { kind: "unknown" }, documentDate: null, revisions: [], createdAt: "2026-10-18T10:00:00Z", verification: "unverified", conflictGroupId: null, encounterId: null } as never);
+    await repo.saveProposal("me", { documentId: document.id, encounter: { key: "e", kind: "lab", title: "Анализ крови", date: { kind: "exact", date: "2026-02-10" }, specialist: null }, items: [] });
+
+    await service.fillAllFormDates();
+    expect(await repo.getDocument("me", document.id)).toMatchObject({ documentDate: "2026-02-10" });
+    expect((await repo.listFacts("me")).find((f) => f.id === "fact_x")).toMatchObject({ eventDate: { kind: "exact", date: "2026-02-10" }, documentDate: "2026-02-10" });
+  });
 });
