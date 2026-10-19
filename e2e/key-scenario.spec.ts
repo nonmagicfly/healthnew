@@ -9,13 +9,15 @@ async function useProfile(page: Page, id: "me" | "demo") {
 }
 
 /** Presses Tab until an element whose accessible text matches is focused. */
-async function tabTo(page: Page, text: RegExp, max = 120) {
+// `selector` narrows the match when a focusable container (e.g. a scrollable list) also contains the text.
+async function tabTo(page: Page, text: RegExp, max = 120, selector = "*") {
   for (let i = 0; i < max; i++) {
     await page.keyboard.press("Tab");
-    const label = await page.evaluate(() => {
+    const label = await page.evaluate((sel) => {
       const el = document.activeElement as HTMLElement | null;
-      return el ? `${el.getAttribute("aria-label") ?? ""} ${el.textContent ?? ""} ${(el as HTMLInputElement).placeholder ?? ""}` : "";
-    });
+      if (!el?.matches(sel)) return "";
+      return `${el.getAttribute("aria-label") ?? ""} ${el.textContent ?? ""} ${(el as HTMLInputElement).placeholder ?? ""}`;
+    }, selector);
     if (text.test(label)) return;
   }
   throw new Error(`Could not reach ${text} with Tab`);
@@ -123,13 +125,9 @@ test("keyboard-only walkthrough in the demo profile", async ({ page }) => {
   await page.keyboard.type("Как менялся ферритин?");
   await page.keyboard.press("Enter");
   await expect(page.getByText(/Ферритин изменился с 310 до 180/)).toBeVisible();
-  await tabTo(page, /Какой контекст учтён/);
-  // The answer can re-render right after it appears and collapse the details, so re-press Enter on the focused summary until it stays open.
-  await expect(async () => {
-    const open = await page.evaluate(() => (document.activeElement?.closest("details") as HTMLDetailsElement | null)?.open);
-    if (!open) await page.keyboard.press("Enter");
-    await expect(page.getByText("Относится к показателю из вопроса").first()).toBeVisible({ timeout: 1000 });
-  }).toPass();
+  await tabTo(page, /Какой контекст учтён/, 120, "summary");
+  await page.keyboard.press("Enter");
+  await expect(page.getByText("Относится к показателю из вопроса").first()).toBeVisible();
 
   // Keyboard navigation between sections.
   await page.goto("/");
