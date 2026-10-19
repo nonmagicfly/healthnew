@@ -156,3 +156,22 @@ test("arbitrary upload is stored honestly, duplicates and errors are explained",
   await page.getByLabel(/Файл \(PDF/).setInputFiles({ name: "empty.txt", mimeType: "text/plain", buffer: Buffer.from("") });
   await expect(page.getByRole("alert").filter({ hasText: "Файл пустой" })).toBeVisible();
 });
+
+test("several files are uploaded at once, each with its own result", async ({ page }) => {
+  await useProfile(page, "me");
+  await page.goto("/documents");
+  const txt = (name: string, text: string) => ({ name, mimeType: "text/plain", buffer: Buffer.from(text) });
+  await page.getByLabel(/Файл \(PDF/).setInputFiles([
+    txt("приём-1.txt", "[00:00:05] Врач: Как самочувствие?\n[00:00:10] Пациент: Хорошо."),
+    txt("приём-2.txt", "[00:00:05] Врач: Сдайте анализ крови."),
+    txt("пустой.txt", ""),
+  ]);
+  const list = page.getByRole("list").filter({ hasText: "приём-1.txt" });
+  await expect(list.getByRole("listitem").filter({ hasText: "приём-1.txt" })).toContainText("загружен");
+  await expect(list.getByRole("listitem").filter({ hasText: "приём-2.txt" })).toContainText("загружен");
+  await expect(list.getByRole("listitem").filter({ hasText: "пустой.txt" })).toContainText("Файл пустой");
+  // Without a connected model there is nothing to send.
+  await expect(page.getByText(/извлечь факты из всех/i)).toHaveCount(0);
+  await list.getByRole("link", { name: "приём-2.txt" }).click();
+  await expect(page).toHaveURL(/\/documents\/.+/);
+});
