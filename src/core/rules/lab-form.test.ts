@@ -159,4 +159,32 @@ describe("lab form parser", () => {
     expect(r2).toMatchObject({ applied: false, document: { status: "review_pending" } });
     expect(r2.reason).toContain("другого человека");
   });
+
+  it("moves another person's form with its facts to a new profile and points the next form there", async () => {
+    const { service, repo } = await createTestService();
+    const up = (name: string, text: string[]) => service.upload("me", { fileName: name, mime: "text/plain", bytes: new TextEncoder().encode(text.join("\n")), kind: "lab_report" });
+    const mine = await up("мой.txt", FORM("ТЕСТОВ", "01.03.2026"));
+    await service.applyProposal("me", mine.document.id, { acceptedStateChanges: [], postponedClarifications: [] });
+    const child = await up("ребёнок.txt", FORM("ДРУГОВА", "02.03.2026"));
+    await service.applyProposal("me", child.document.id, { acceptedStateChanges: [], postponedClarifications: [] });
+    const before = (await repo.listFacts("me")).length;
+
+    const alice = await service.createProfile("Алиса");
+    await expect(service.createProfile(" алиса ")).rejects.toThrow("уже есть");
+    await service.moveDocument("me", child.document.id, alice.id);
+
+    expect(await repo.getDocument(alice.id, child.document.id)).toMatchObject({ profileId: alice.id });
+    expect(await repo.getDocument("me", child.document.id)).toBeNull();
+    const moved = await repo.listFacts(alice.id);
+    expect(moved.length).toBeGreaterThan(5);
+    expect(moved.every((f) => f.sources.every((x) => x.documentId === child.document.id))).toBe(true);
+    expect((await repo.listFacts("me")).length).toBe(before - moved.length);
+    expect((await service.decisions("me")).documents).toHaveLength(0);
+    expect((await repo.getProfile(alice.id))!.patientNames).toEqual(["ДРУГОВА Иван Петрович"]);
+
+    // The next form with that name in "me" is flagged with the profile it belongs to.
+    const next = await up("ребёнок-2.txt", FORM("ДРУГОВА", "05.03.2026"));
+    const p = (await service.getDocument("me", next.document.id)).proposal!;
+    expect(p.items[0].explanation).toContain("«Алиса»");
+  });
 });

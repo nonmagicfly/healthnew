@@ -423,6 +423,7 @@ export function DocumentDetailView() {
           {d.status === "review_pending" && detail.data.proposal && <ProposalCard detail={detail.data} onApplied={bump} />}
           {canParseLocally(d) && <LocalParse doc={d} onDone={bump} />}
           {canSendToModel(d) && <ModelExtract doc={d} onDone={bump} />}
+          {!d.sampleKey && <MoveDocument doc={d} otherPatient={detail.data.proposal?.items.some((i) => i.key === `llm:${d.id}:patient`) ?? false} patientName={detail.data.proposal?.patientName ?? null} />}
           {d.status !== "review_pending" && (
             <Card title={`Извлечённые факты (${detail.data.facts.length})`}>
               {detail.data.facts.length === 0 ? (
@@ -556,6 +557,74 @@ function canParseLocally(d: SourceDocument) {
 }
 
 /** Tries the local lab-form parser: free, instant, and the document stays on this computer. */
+/** Moves a document that belongs to someone else (e.g. a child's form) to that person's profile. */
+function MoveDocument({ doc, otherPatient, patientName }: { doc: SourceDocument; otherPatient: boolean; patientName: string | null }) {
+  const { base, profiles, profile, setProfileId, bump } = useProfile();
+  const targets = profiles.filter((p) => !p.isDemo && p.id !== profile?.id);
+  const suggested = patientName ? targets.find((p) => p.patientNames?.some((n) => n.toLowerCase() === patientName.toLowerCase())) : undefined;
+  const [target, setTarget] = useState(suggested?.id ?? targets[0]?.id ?? "");
+  const [newName, setNewName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const move = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      let to = target;
+      if (!to) {
+        const p = await postJson<{ id: string }>("/api/profiles", { name: newName });
+        to = p.id;
+      }
+      await postJson(`${base}/documents/${doc.id}/move`, { targetProfileId: to });
+      bump();
+      setProfileId(to);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  const body = (
+    <div className="space-y-2 text-sm">
+      <p className="text-slate-700">
+        {otherPatient
+          ? `Бланк выписан на «${patientName}». Если это документ другого человека, перенесите его в его профиль вместе со всем, что из него извлечено.`
+          : "Если документ относится к другому человеку, перенесите его в его профиль вместе со всем, что из него извлечено."}
+      </p>
+      <div className="flex flex-wrap items-end gap-2">
+        <label>
+          Перенести в профиль
+          <select id="move-target" value={target} onChange={(e) => setTarget(e.target.value)} className="mt-1 block rounded border border-slate-300 px-2 py-1">
+            {targets.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+            <option value="">+ Новый профиль…</option>
+          </select>
+        </label>
+        {!target && (
+          <label>
+            Имя
+            <input id="move-new-name" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder={patientName?.split(" ")[1] ?? "Например, Алиса"} className="mt-1 block rounded border border-slate-300 px-2 py-1" />
+          </label>
+        )}
+        <button type="button" onClick={move} disabled={busy || (!target && !newName.trim())} className="rounded bg-teal-700 px-4 py-1.5 text-white disabled:opacity-50">
+          {busy ? "Переношу…" : "Перенести"}
+        </button>
+      </div>
+      {error && <p role="alert" className="text-red-700">{error}</p>}
+    </div>
+  );
+  if (otherPatient) return <Card title="Чей это документ?">{body}</Card>;
+  return (
+    <details className="rounded-lg border border-slate-200 bg-white p-3">
+      <summary className="cursor-pointer text-sm text-slate-700">Документ другого человека? Перенести в другой профиль</summary>
+      <div className="mt-2">{body}</div>
+    </details>
+  );
+}
+
 function LocalParse({ doc, onDone }: { doc: SourceDocument; onDone: () => void }) {
   const { base } = useProfile();
   const [busy, setBusy] = useState(false);

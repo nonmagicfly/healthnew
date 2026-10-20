@@ -153,6 +153,64 @@ export class HealthService {
     return this.d.repo.listProfiles();
   }
 
+  /** A new profile for a family member. Its data never mixes with other profiles. */
+  async createProfile(name: string): Promise<Profile> {
+    const clean = name.trim().replace(/\s+/g, " ");
+    if (!clean) throw new ValidationError("Укажите имя профиля");
+    if (clean.length > 60) throw new ValidationError("Имя профиля длиннее 60 символов");
+    if ((await this.d.repo.listProfiles()).some((p) => p.name.toLowerCase() === clean.toLowerCase())) throw new ValidationError("Профиль с таким именем уже есть");
+    const profile: Profile = { id: this.d.ids.next("prof"), name: clean, isDemo: false };
+    await this.d.repo.saveProfile(profile);
+    return profile;
+  }
+
+  /**
+   * Moves a document with everything extracted from it to another profile, e.g. a child's form uploaded into a parent's profile.
+   * A fact that also has sources in other documents stays and loses this document's sources; a copy with them goes to the target.
+   */
+  async moveDocument(profileId: string, documentId: string, targetProfileId: string) {
+    const doc = await this.d.repo.getDocument(profileId, documentId);
+    if (!doc) throw new NotFoundError("Документ не найден");
+    const target = await this.profile(targetProfileId);
+    if (target.id === profileId) throw new ValidationError("Документ уже в этом профиле");
+    if (target.isDemo || doc.sampleKey) throw new ValidationError("Демо-профиль и встроенные примеры не смешиваются с личными данными");
+    if (doc.original && (await this.d.repo.listDocuments(target.id)).some((d) => d.original?.sha256 === doc.original!.sha256))
+      throw new ValidationError(`Этот документ уже есть в профиле «${target.name}»`);
+    const at = this.now();
+    const patientKey = `llm:${documentId}:patient`;
+
+    for (const v of await this.d.repo.listVersions(profileId, documentId)) await this.d.repo.saveVersion({ ...v, profileId: target.id });
+    for (const f of await this.d.repo.listFacts(profileId)) {
+      const own = f.sources.filter((x) => x.documentId === documentId);
+      if (!own.length) continue;
+      if (f.dedupKey === patientKey) {
+        // Moving the form answers the question whose form it is.
+        await this.d.repo.saveFact({ ...resolveClarification(f, `Перенесён в профиль «${target.name}»`, at), profileId: target.id });
+        continue;
+      }
+      if (own.length === f.sources.length) {
+        await this.d.repo.saveFact({ ...f, profileId: target.id, encounterId: null, conflictGroupId: null });
+      } else {
+        await this.d.repo.saveFact({ ...f, sources: f.sources.filter((x) => x.documentId !== documentId) });
+        await this.d.repo.saveFact({ ...f, id: this.d.ids.next("fact"), profileId: target.id, sources: own, encounterId: null, conflictGroupId: null });
+      }
+    }
+    for (const e of await this.d.repo.listEncounters(profileId)) {
+      if (!e.documentIds.includes(documentId)) continue;
+      await this.d.repo.saveEncounter({ ...e, documentIds: e.documentIds.filter((id) => id !== documentId) });
+    }
+    const proposal = await this.d.repo.getProposal(profileId, documentId);
+    if (proposal) {
+      await this.d.repo.deleteProposal(profileId, documentId);
+      await this.d.repo.saveProposal(target.id, { ...proposal, items: proposal.items.filter((i) => i.key !== patientKey) });
+      if (proposal.patientName && !target.patientNames?.includes(proposal.patientName))
+        await this.d.repo.saveProfile({ ...target, patientNames: [...(target.patientNames ?? []), proposal.patientName] });
+    }
+    const moved: SourceDocument = { ...doc, profileId: target.id, encounterId: null };
+    await this.d.repo.saveDocument(moved);
+    return moved;
+  }
+
   async profile(profileId: string): Promise<Profile> {
     const p = await this.d.repo.getProfile(profileId);
     if (!p) throw new NotFoundError("Профиль не найден");
@@ -389,12 +447,17 @@ export class HealthService {
       const name = (await this.d.repo.getProposal(doc.profileId, d.id))?.patientName;
       if (name) others.add(name.toLowerCase());
     }
-    if (parsed.patientName && others.size && !others.has(parsed.patientName.toLowerCase())) {
+    // A name already moved to another profile points there even when this profile has no forms yet.
+    const name = parsed.patientName?.toLowerCase() ?? null;
+    const owner = name
+      ? (await this.d.repo.listProfiles()).find((p) => p.id !== doc.profileId && p.patientNames?.some((n) => n.toLowerCase() === name))
+      : undefined;
+    if (parsed.patientName && ((others.size && !others.has(name!)) || owner)) {
       const key = `llm:${doc.id}:patient`;
       proposal.items.unshift({
         key,
         group: "clarify",
-        explanation: "ФИО в бланке отличается от других документов профиля.",
+        explanation: owner ? `ФИО в бланке совпадает с профилем «${owner.name}».` : "ФИО в бланке отличается от других документов профиля.",
         draft: {
           type: "clarification",
           label: `Бланк выписан на «${parsed.patientName}». Это документ этого профиля?`,
