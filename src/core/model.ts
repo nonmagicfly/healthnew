@@ -57,6 +57,10 @@ export interface SourceDocument {
   documentDate: ISODate | null;
   specialist: string | null;
   area: string | null;
+  /** Clinic or laboratory, as printed in the document. */
+  institution?: string | null;
+  /** Set when the user edited type, section, doctor or clinic: these are no longer filled automatically. */
+  labelsEditedAt?: ISODateTime | null;
   original: OriginalFile | null;
   /** Set when the document was opened from a built-in example with a prepared parse. */
   sampleKey: string | null;
@@ -263,6 +267,7 @@ export interface Encounter {
   title: string;
   date: DateValue;
   specialist: string | null;
+  institution?: string | null;
   documentIds: string[];
 }
 

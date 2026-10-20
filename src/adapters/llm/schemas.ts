@@ -14,7 +14,7 @@ const DateSchema = z.object({
 export const ExtractionSchema = z.object({
   documentDate: DateSchema.nullable().describe("Дата, напечатанная в самом документе: дата выдачи, приёма или исследования"),
   encounter: z
-    .object({ kind: z.enum(["visit", "lab", "examination"]), title: z.string(), date: DateSchema, specialist: z.string().nullable() })
+    .object({ kind: z.enum(["visit", "lab", "examination"]), title: z.string(), date: DateSchema, specialist: z.string().nullable(), institution: z.string().nullable().describe("Клиника или лаборатория, как напечатано в документе") })
     .nullable(),
   items: z.array(
     z.object({
