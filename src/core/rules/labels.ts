@@ -77,11 +77,12 @@ export function deriveLabels(src: LabelSource): DerivedLabels {
 }
 
 /** Fills only empty labels; what the user entered or edited is never replaced. */
-export function applyLabels(doc: SourceDocument, labels: DerivedLabels): SourceDocument {
+/** fromForm: the labels come from a recognized form layout, which a conversation transcript never has. */
+export function applyLabels(doc: SourceDocument, labels: DerivedLabels, fromForm = false): SourceDocument {
   if (doc.labelsEditedAt) return doc;
   const next = { ...doc };
-  // A plain-text file is taken for a transcript at upload; a lab form found in it is a lab report.
-  if (labels.kind && (doc.kind === "other" || (doc.kind === "transcript" && labels.kind === "lab_report"))) next.kind = labels.kind;
+  // A plain-text file is taken for a transcript at upload; a lab form or a consultation form found in it says otherwise.
+  if (labels.kind && (doc.kind === "other" || (doc.kind === "transcript" && (labels.kind === "lab_report" || fromForm)))) next.kind = labels.kind;
   // A transcript keeps its kind; its section and doctor still come from the visit it records.
   if (!doc.area && labels.area && (next.kind === labels.kind || doc.kind === "transcript")) next.area = labels.area;
   if (!doc.specialist && labels.specialist) next.specialist = labels.specialist;

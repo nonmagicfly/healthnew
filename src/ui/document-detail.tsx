@@ -422,7 +422,8 @@ export function DocumentDetailView() {
         <div className="space-y-4">
           {d.status === "review_pending" && detail.data.proposal && <ProposalCard detail={detail.data} onApplied={bump} />}
           {canParseLocally(d) && <LocalParse doc={d} onDone={bump} />}
-          {canSendToModel(d) && <ModelExtract doc={d} onDone={bump} />}
+          {/* A document read by the local parsers is never sent to the model. */}
+          {canSendToModel(d) && !detail.data.facts.some((f) => f.extraction.method === "parser") && <ModelExtract doc={d} onDone={bump} />}
           {!d.sampleKey && <MoveDocument doc={d} otherPatient={detail.data.proposal?.items.some((i) => i.key === `llm:${d.id}:patient`) ?? false} patientName={detail.data.proposal?.patientName ?? null} />}
           {d.status !== "review_pending" && (
             <Card title={`Извлечённые факты (${detail.data.facts.length})`}>
@@ -722,9 +723,9 @@ function LocalParse({ doc, onDone }: { doc: SourceDocument; onDone: () => void }
     }
   };
   return (
-    <Card title="Разобрать бланк без модели">
+    <Card title="Разобрать без модели">
       <p className="text-sm text-slate-700">
-        Бланки анализов известного вида разбираются прямо на этом компьютере: бесплатно и без отправки куда-либо. {doc.status === "applied" && "Совпадающие факты не задвоятся."}
+        Бланки анализов и консультации известного вида разбираются прямо на этом компьютере: бесплатно и без отправки куда-либо. {doc.status === "applied" && "Совпадающие факты не задвоятся."}
       </p>
       <button type="button" onClick={run} disabled={busy} className="mt-2 rounded border border-teal-700 px-4 py-1.5 text-sm text-teal-800 disabled:opacity-50">
         {busy ? "Разбираю…" : "Разобрать по шаблону"}
