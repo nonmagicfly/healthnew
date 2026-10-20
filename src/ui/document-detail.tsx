@@ -8,6 +8,7 @@ import type { ContentVersion, Encounter, Fact, Proposal, ProposalItem, SourceDoc
 import { MEDICATION_STATUS_LABEL } from "@/core/rules/facts";
 import { formatDateValue } from "@/core/rules/dates";
 import { SPEAKER_LABEL } from "@/core/rules/transcript";
+import { indicatorOf, qualitativeIndicatorOf } from "@/core/indicators";
 import { api, postJson, useApi } from "./api";
 import { FactEditor } from "./fact-editor";
 import type { FactAction } from "@/core/service";
@@ -235,6 +236,11 @@ function FactCard({ f, docId, focused }: { f: Fact; docId: string; focused: bool
         <Badge>{TYPE_LABEL[f.type]}</Badge>
         <span className="font-medium">{f.label}</span>
         {f.conflictGroupId && <Badge tone="red">Расхождение с другим источником</Badge>}
+        {indicatorCode(f) && (
+          <Link href={`/indicators?code=${encodeURIComponent(indicatorCode(f)!)}`} className="text-sm text-teal-800 underline">
+            Карточка показателя
+          </Link>
+        )}
       </div>
       {detail && <p className="mt-0.5 text-sm text-slate-700">{detail}</p>}
       <p className="mt-0.5 text-xs text-slate-500">
@@ -733,4 +739,11 @@ function LocalParse({ doc, onDone }: { doc: SourceDocument; onDone: () => void }
       {error && <p role="alert" className="mt-2 text-sm text-red-700">{error}</p>}
     </Card>
   );
+}
+
+/** The indicator page a lab result or a qualitative finding belongs to, with its chart and every value. */
+function indicatorCode(f: Fact): string | null {
+  if (f.value.kind === "lab_result") return indicatorOf(f.value);
+  if (f.value.kind === "qualitative") return qualitativeIndicatorOf(f.value.indicator);
+  return null;
 }
