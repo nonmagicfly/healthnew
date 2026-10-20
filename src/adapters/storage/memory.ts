@@ -72,6 +72,11 @@ export class MemoryRepository implements Repository {
     await this.persist();
   }
 
+  async deleteProposal(profileId: string, documentId: string) {
+    this.db.proposals = this.db.proposals.filter((x) => !(x.profileId === profileId && x.documentId === documentId));
+    await this.persist();
+  }
+
   async listMessages(profileId: string) { return clone(this.db.messages.filter((m) => m.profileId === profileId)); }
   async saveMessage(m: ChatMessage) { upsert(this.db.messages, clone(m)); await this.persist(); }
 }

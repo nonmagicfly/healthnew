@@ -9,6 +9,8 @@ export interface Profile {
   id: string;
   name: string;
   isDemo: boolean;
+  /** Names printed on lab forms moved into this profile; used only to suggest where a new form belongs. */
+  patientNames?: string[];
 }
 
 // ---------- Dates ----------

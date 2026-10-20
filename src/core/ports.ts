@@ -32,6 +32,7 @@ export interface Repository {
 
   getProposal(profileId: string, documentId: string): Promise<Proposal | null>;
   saveProposal(profileId: string, p: Proposal): Promise<void>;
+  deleteProposal(profileId: string, documentId: string): Promise<void>;
 
   listMessages(profileId: string): Promise<ChatMessage[]>;
   saveMessage(m: ChatMessage): Promise<void>;

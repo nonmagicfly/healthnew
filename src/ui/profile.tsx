@@ -50,7 +50,7 @@ function subscribe(cb: () => void) {
 export function ProfileProvider({ children }: { children: ReactNode }) {
   const profileId = useSyncExternalStore(subscribe, readStoredProfile, () => "me");
   const [version, setVersion] = useState(0);
-  const meta = useApi<{ profiles: Profile[]; samples: SampleInfo[]; liveModel: { provider: string; model: string } | null }>("/api/profiles");
+  const meta = useApi<{ profiles: Profile[]; samples: SampleInfo[]; liveModel: { provider: string; model: string } | null }>("/api/profiles", version);
 
   const setProfileId = useCallback((id: string) => {
     try {

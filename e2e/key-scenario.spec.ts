@@ -231,3 +231,27 @@ test("doctor summary lists the latest lab results with the lab's reference", asy
   await expect(iron).toContainText("23.0 от 03.03.2026, ↓ ниже прошлого");
   await expect(page.getByRole("button", { name: "Печать или PDF" })).toBeVisible();
 });
+
+test("another person's form is moved to a new family profile", async ({ page }) => {
+  await useProfile(page, "me");
+  await page.goto("/documents");
+  const form = (surname: string, date: string) =>
+    [`${surname}Фамилия: Дата: ${date}`, "ИванИмя:", "ПетровичОтчество:", "Наименование исследования Результат Ед. изм. Нормальные значенияФлаг", "Ферритин мкг/л 6.0-60.032.0"].join("\n");
+  await page.getByLabel(/Файл \(PDF/).setInputFiles([
+    { name: "семья-1.txt", mimeType: "text/plain", buffer: Buffer.from(form("ТЕСТОВ", "06.03.2026")) },
+    { name: "семья-2.txt", mimeType: "text/plain", buffer: Buffer.from(form("МАЛЫШЕВА", "07.03.2026")) },
+  ]);
+  const row = page.getByRole("listitem").filter({ hasText: "семья-2.txt" });
+  await expect(row).toContainText("нужна ваша проверка");
+  await row.getByRole("link", { name: "семья-2.txt" }).click();
+
+  await expect(page.getByRole("heading", { name: "Чей это документ?" })).toBeVisible();
+  await page.locator("#move-target").selectOption("");
+  await page.locator("#move-new-name").fill("Маша");
+  await page.getByRole("button", { name: "Перенести" }).click();
+  const picker = page.getByRole("combobox", { name: "Профиль", exact: true });
+  await expect(picker).toHaveValue(/prof_/);
+  await expect(picker.locator("option:checked")).toHaveText("Маша");
+  await page.goto("/documents");
+  await expect(page.getByRole("link", { name: /Комплексные|семья-2/ }).first()).toBeVisible();
+});
