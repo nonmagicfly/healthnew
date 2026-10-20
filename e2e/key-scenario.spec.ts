@@ -215,3 +215,19 @@ test("decisions left by documents are made on one screen", async ({ page }) => {
   await omeprazole.getByRole("button", { name: "Не принимаю" }).click();
   await expect(omeprazole).toHaveCount(0);
 });
+
+test("doctor summary lists the latest lab results with the lab's reference", async ({ page }) => {
+  await useProfile(page, "me");
+  await page.goto("/documents");
+  const form = ["ТЕСТОВФамилия: Дата: 03.03.2026", "Наименование исследования Результат Ед. изм. Нормальные значенияФлаг", "Железо мкмоль/л 9.0-21.5↑ 23.0", "(HGB) Гемоглобин г/л 132-173140"].join("\n");
+  await page.getByLabel(/Файл \(PDF/).setInputFiles([
+    { name: "сводка-1.txt", mimeType: "text/plain", buffer: Buffer.from(form) },
+    { name: "сводка-2.txt", mimeType: "text/plain", buffer: Buffer.from(form.replace("03.03.2026", "04.04.2026").replace("23.0", "19.5")) },
+  ]);
+  await expect(page.getByText(/Добавлено в историю: документов 2/)).toBeVisible();
+  await page.getByRole("link", { name: "Сводка для врача" }).click();
+  const iron = page.getByRole("row").filter({ hasText: "Железо сывороточное" });
+  await expect(iron).toContainText("19.5 мкмоль/л");
+  await expect(iron).toContainText("23.0 от 03.03.2026, ↓ ниже прошлого");
+  await expect(page.getByRole("button", { name: "Печать или PDF" })).toBeVisible();
+});

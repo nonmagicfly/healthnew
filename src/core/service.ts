@@ -38,6 +38,7 @@ import {
 } from "./rules/facts";
 import { buildState, stateToText } from "./rules/state";
 import { buildDecisions } from "./rules/decisions";
+import { buildDoctorSummary } from "./rules/summary";
 import { buildIndicatorView, findMatchingResult, listIndicators } from "./rules/series";
 import { buildTimeline, groupTimeline } from "./rules/timeline";
 import { retrieveFacts } from "./rules/retrieval";
@@ -772,6 +773,11 @@ export class HealthService {
   }
 
   // ---------- Derived views ----------
+
+  /** Overview for a doctor from stored facts only. */
+  async doctorSummary(profileId: string) {
+    return buildDoctorSummary(await this.listFacts(profileId), await this.d.repo.listDocuments(profileId), this.now().slice(0, 10));
+  }
 
   /** Everything waiting for the user's decision, across all documents. */
   async decisions(profileId: string) {

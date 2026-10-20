@@ -14,6 +14,7 @@ const NAV = [
   { href: "/decisions", label: "Решения" },
   { href: "/history", label: "История" },
   { href: "/chat", label: "Чат" },
+  { href: "/summary", label: "Сводка для врача" },
 ];
 
 function Header() {
@@ -22,7 +23,7 @@ function Header() {
   const path = usePathname();
   const active = (href: string) => (href === "/" ? path === "/" : path.startsWith(href));
   return (
-    <header className="border-b border-slate-200 bg-white">
+    <header className="border-b border-slate-200 bg-white print:hidden">
       <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-4 px-4 py-3">
         <Link href="/" className="text-lg font-semibold text-slate-900">
           История здоровья
