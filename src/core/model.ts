@@ -34,6 +34,8 @@ export type ProcessingStatus =
   | "recognized"
   | "recognition_unavailable"
   | "extraction_unavailable"
+  /** Text is ready; facts can be extracted by a language model once the user agrees to send the document. */
+  | "extraction_ready"
   | "review_pending"
   | "applied"
   | "error";
@@ -220,7 +222,7 @@ export type FactValue =
 
 export interface FactRevision {
   at: ISODateTime;
-  action: "created" | "corrected" | "confirmed_current" | "ended" | "status_changed" | "source_added" | "rejected" | "resolved";
+  action: "created" | "corrected" | "confirmed_current" | "ended" | "status_changed" | "source_added" | "rejected" | "resolved" | "dates_filled";
   reason: string | null;
   before: Partial<Pick<Fact, "label" | "value" | "validity" | "verification" | "eventDate">> | null;
   after: Partial<Pick<Fact, "label" | "value" | "validity" | "verification" | "eventDate">> | null;
@@ -240,7 +242,8 @@ export interface Fact {
   documentDate: ISODate | null;
   verification: Verification;
   validity: Validity;
-  extraction: { method: "prepared" | "parser" | "manual"; confidence: number | null };
+  /** model: which language model proposed the fact (method "llm"). */
+  extraction: { method: "prepared" | "parser" | "manual" | "llm"; confidence: number | null; model?: string | null };
   specialist: string | null;
   /** Health problem grouping, e.g. "ЖКТ", "Обмен железа". */
   problem: string | null;
@@ -287,6 +290,10 @@ export interface ProposalItem {
 
 export interface Proposal {
   documentId: string;
+  /** Date printed on the document, proposed when the user did not enter one at upload. */
+  documentDate?: ISODate | null;
+  /** Patient name printed on a lab form, shown so a form of another person is noticed. */
+  patientName?: string | null;
   encounter: Omit<Encounter, "id" | "profileId" | "documentIds"> & { key: string } | null;
   items: ProposalItem[];
 }

@@ -16,6 +16,8 @@ interface Ctx {
   profile: Profile | null;
   setProfileId: (id: string) => void;
   samples: SampleInfo[];
+  /** Connected language model; null in demo mode. */
+  liveModel: { provider: string; model: string } | null;
   documents: DocumentListItem[];
   docTitle: (id: string) => string;
   /** Incremented after every change so all views reload derived data. */
@@ -48,7 +50,7 @@ function subscribe(cb: () => void) {
 export function ProfileProvider({ children }: { children: ReactNode }) {
   const profileId = useSyncExternalStore(subscribe, readStoredProfile, () => "me");
   const [version, setVersion] = useState(0);
-  const meta = useApi<{ profiles: Profile[]; samples: SampleInfo[] }>("/api/profiles");
+  const meta = useApi<{ profiles: Profile[]; samples: SampleInfo[]; liveModel: { provider: string; model: string } | null }>("/api/profiles");
 
   const setProfileId = useCallback((id: string) => {
     try {
@@ -71,6 +73,7 @@ export function ProfileProvider({ children }: { children: ReactNode }) {
       profile: profiles.find((p) => p.id === profileId) ?? null,
       setProfileId,
       samples: meta.data?.samples ?? [],
+      liveModel: meta.data?.liveModel ?? null,
       documents,
       docTitle: (id) => documents.find((d) => d.document.id === id)?.document.title ?? "Документ",
       version,

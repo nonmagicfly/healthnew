@@ -9,6 +9,7 @@ import type {
   FactDraft,
   MedicationStatus,
   Profile,
+  Proposal,
   ProposalDecision,
   SourceDocument,
   SourceRef,
@@ -19,12 +20,14 @@ import type {
   FactExtractor,
   FileStore,
   IdGenerator,
+  LiveModel,
   LlmAdapter,
   Repository,
   SampleCatalog,
 } from "./ports";
 import {
   addSource,
+  fillMissingDates,
   confirmCurrent,
   correctFact,
   endFact,
@@ -34,15 +37,22 @@ import {
   type FactCorrection,
 } from "./rules/facts";
 import { buildState, stateToText } from "./rules/state";
+import { buildDecisions } from "./rules/decisions";
+import { buildDoctorSummary } from "./rules/summary";
 import { buildIndicatorView, findMatchingResult, listIndicators } from "./rules/series";
 import { buildTimeline, groupTimeline } from "./rules/timeline";
 import { retrieveFacts } from "./rules/retrieval";
 import { buildLlmRequest } from "./rules/llm-request";
 import { exactDate, unknownDate } from "./rules/dates";
-import { parseLabValue } from "./rules/lab-values";
+import { normalizeUnit, parseLabValue } from "./rules/lab-values";
+import { indicatorOf } from "./indicators";
+import { contentKey, normalizeIsoDate, proposalFromExtraction } from "./rules/extraction";
+import { parseLabForm } from "./rules/lab-form";
 
 export class NotFoundError extends Error {}
 export class ValidationError extends Error {}
+/** A connected model could not answer; the message is safe to show and has no document content. */
+export class ExternalServiceError extends Error {}
 
 export interface Deps {
   repo: Repository;
@@ -50,6 +60,8 @@ export interface Deps {
   recognizer: DocumentRecognizer;
   extractor: FactExtractor;
   llm: LlmAdapter;
+  /** Connected language model; null when no API key is configured (demo mode only). */
+  live?: LiveModel | null;
   samples: SampleCatalog;
   clock: Clock;
   ids: IdGenerator;
@@ -62,6 +74,11 @@ export const DEFAULT_PROFILES: Profile[] = [
 
 const ALLOWED_MIME = new Set(["application/pdf", "text/plain", "text/markdown"]);
 const MAX_SIZE = 25 * 1024 * 1024;
+
+/** Text of a document with whitespace collapsed, for spotting the same document saved as another file. */
+function sameText(pages: string[]): string {
+  return pages.join("\n").replace(/\s+/g, " ").trim();
+}
 
 export async function sha256Hex(bytes: Uint8Array): Promise<string> {
   const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes as BufferSource);
@@ -198,9 +215,8 @@ export class HealthService {
 
     const sha256 = await sha256Hex(input.bytes);
     const existing = (await this.d.repo.listDocuments(profileId)).find((d) => d.original?.sha256 === sha256);
-    if (existing) return { document: existing, duplicate: true };
+    if (existing) return { document: await this.fillFormDates(existing), duplicate: true };
 
-    await this.d.files.put(sha256, input.bytes);
     const kind = input.kind ?? (mime === "application/pdf" ? "other" : "transcript");
     const doc: SourceDocument = {
       id: this.d.ids.next("doc"),
@@ -219,8 +235,20 @@ export class HealthService {
       statusMessage: null,
       createdAt: this.now(),
     };
+    // The same document saved again as another file (a re-download, a copy) has the same text: it is not stored twice.
+    const rec = await this.d.recognizer.recognize({ document: doc, bytes: input.bytes });
+    const text = rec.ok ? sameText(rec.version.pages) : "";
+    if (text.length >= 50) {
+      for (const other of await this.d.repo.listDocuments(profileId)) {
+        const versions = await this.d.repo.listVersions(profileId, other.id);
+        if (versions.some((v) => sameText(v.pages) === text)) return { document: await this.fillFormDates(other), duplicate: true };
+      }
+    }
+    await this.d.files.put(sha256, input.bytes);
     await this.d.repo.saveDocument(doc);
-    return { document: await this.process(doc, input.bytes), duplicate: false };
+    const processed = await this.process(doc, input.bytes, rec);
+    await this.fillAllFormDates(profileId);
+    return { document: processed, duplicate: false };
   }
 
   /** Opens a built-in example. Synthetic examples are allowed only in the demo profile. */
@@ -299,7 +327,7 @@ export class HealthService {
     await this.d.repo.saveVersion({ ...v, id: this.d.ids.next("ver"), profileId: doc.profileId, documentId: doc.id, createdAt: this.now() });
   }
 
-  private async process(doc: SourceDocument, bytes: Uint8Array | null): Promise<SourceDocument> {
+  private async process(doc: SourceDocument, bytes: Uint8Array | null, recognized?: Awaited<ReturnType<Deps["recognizer"]["recognize"]>>): Promise<SourceDocument> {
     let current = doc;
     const setStatus = async (status: SourceDocument["status"], statusMessage: string | null) => {
       current = { ...current, status, statusMessage };
@@ -307,7 +335,7 @@ export class HealthService {
     };
     try {
       if (bytes) {
-        const rec = await this.d.recognizer.recognize({ document: doc, bytes });
+        const rec = recognized ?? (await this.d.recognizer.recognize({ document: doc, bytes }));
         if (rec.ok) {
           await this.saveVersion(doc, rec.version);
           await setStatus("recognized", null);
@@ -317,6 +345,20 @@ export class HealthService {
       }
       const versions = await this.d.repo.listVersions(doc.profileId, doc.id);
       const ex = await this.d.extractor.extract({ document: current, versions });
+      if (!ex.ok && !current.sampleKey) {
+        // A lab form of a known layout is parsed locally: no model, nothing sent anywhere.
+        const proposal = await this.labFormProposal(current, versions);
+        if (proposal) {
+          await this.d.repo.saveProposal(doc.profileId, proposal);
+          await setStatus("review_pending", null);
+          return current;
+        }
+      }
+      if (!ex.ok && ex.reason === "not_connected" && this.d.live && !current.sampleKey) {
+        // Nothing is sent automatically: the user decides per document.
+        await setStatus("extraction_ready", [current.status === "recognition_unavailable" ? current.statusMessage : null, this.readyMessage()].filter(Boolean).join(" "));
+        return current;
+      }
       if (!ex.ok) {
         await setStatus(
           current.status === "recognition_unavailable" ? "recognition_unavailable" : "extraction_unavailable",
@@ -331,6 +373,129 @@ export class HealthService {
       await setStatus("error", "Не удалось обработать документ. Оригинал сохранён.");
     }
     return current;
+  }
+
+  /** Proposal from the local lab-form parser, or null when the layout is not recognized. */
+  private async labFormProposal(doc: SourceDocument, versions: ContentVersion[]): Promise<Proposal | null> {
+    const text = versions.find((v) => v.method === "pdf_text_layer" || v.method === "plain_text" || v.method === "transcript_parser");
+    const parsed = text ? parseLabForm(text.pages) : null;
+    if (!parsed) return null;
+    const proposal = proposalFromExtraction(doc, versions, parsed, null, "parser");
+    proposal.patientName = parsed.patientName;
+    // A form printed for someone else (a family member) is pointed out before anything is applied.
+    const others = new Set<string>();
+    for (const d of await this.d.repo.listDocuments(doc.profileId)) {
+      if (d.id === doc.id) continue;
+      const name = (await this.d.repo.getProposal(doc.profileId, d.id))?.patientName;
+      if (name) others.add(name.toLowerCase());
+    }
+    if (parsed.patientName && others.size && !others.has(parsed.patientName.toLowerCase())) {
+      const key = `llm:${doc.id}:patient`;
+      proposal.items.unshift({
+        key,
+        group: "clarify",
+        explanation: "ФИО в бланке отличается от других документов профиля.",
+        draft: {
+          type: "clarification",
+          label: `Бланк выписан на «${parsed.patientName}». Это документ этого профиля?`,
+          value: { kind: "clarification", question: `Бланк выписан на «${parsed.patientName}». Это документ этого профиля?`, aboutFactIds: [], resolution: "open", answer: null },
+          originalText: parsed.patientName,
+          sources: [{ documentId: doc.id, versionId: text!.id, page: 1, quote: parsed.patientName, quoteIsExact: false, timecode: null, segmentId: null, speaker: null, sourceType: "personal" }],
+          eventDate: { kind: "unknown" },
+          documentDate: proposal.documentDate ?? doc.documentDate,
+          validity: { status: "unknown", from: null, to: null, confirmedAt: null },
+          extraction: { method: "parser", confidence: null, model: null },
+          specialist: doc.specialist,
+          problem: null,
+          dedupKey: key,
+          aboutKeys: [],
+        },
+      });
+    }
+    return proposal;
+  }
+
+  /** Fills missing dates of every lab form already in the profiles; runs at startup and after each upload. */
+  async fillAllFormDates(profileId?: string) {
+    const profiles = profileId ? [profileId] : (await this.d.repo.listProfiles()).map((p) => p.id);
+    for (const pid of profiles) for (const doc of await this.d.repo.listDocuments(pid)) await this.fillFormDates(doc);
+  }
+
+  /**
+   * A lab form uploaded again fills the dates its facts are missing from the date printed in the form.
+   * Only empty dates are filled, and never on facts the user corrected; values are not touched.
+   */
+  private async fillFormDates(doc: SourceDocument): Promise<SourceDocument> {
+    if (doc.sampleKey) return doc;
+    const facts = (await this.d.repo.listFacts(doc.profileId)).filter((f) => f.sources.some((s) => s.documentId === doc.id));
+    const undated = facts.some((f) => f.documentDate === null || (f.type === "lab_result" && f.eventDate.kind === "unknown"));
+    if (!undated && doc.documentDate) return doc;
+    // The date printed in a known lab form wins; otherwise the date the earlier extraction found for the document or its visit.
+    const form = await this.labFormProposal(doc, await this.d.repo.listVersions(doc.profileId, doc.id));
+    const stored = await this.d.repo.getProposal(doc.profileId, doc.id);
+    const encounter = (await this.d.repo.listEncounters(doc.profileId)).find((e) => e.id === doc.encounterId) ?? stored?.encounter ?? null;
+    const encounterDate = encounter?.date.kind === "exact" ? encounter.date.date : null;
+    const date = form?.documentDate ?? doc.documentDate ?? stored?.documentDate ?? encounterDate;
+    if (!date) return doc;
+    const at = this.now();
+    for (const f of facts) {
+      // A lab result was collected on the form's date, or on the date of a lab visit; a consultation's date says nothing about it.
+      const collected = form?.documentDate ?? (encounter?.kind === "lab" ? encounterDate : null);
+      const eventDate = f.type === "lab_result" && collected ? ({ kind: "exact", date: collected } as const) : ({ kind: "unknown" } as const);
+      const next = fillMissingDates(f, eventDate, date, at);
+      if (next !== f) await this.d.repo.saveFact(next);
+    }
+    if (doc.documentDate) return doc;
+    const updated: SourceDocument = { ...doc, documentDate: date };
+    await this.d.repo.saveDocument(updated);
+    return updated;
+  }
+
+  /** Parses an already uploaded document with the local lab-form parser. */
+  async parseLocally(profileId: string, documentId: string) {
+    const doc = await this.d.repo.getDocument(profileId, documentId);
+    if (!doc) throw new NotFoundError("Документ не найден");
+    if (doc.sampleKey) throw new ValidationError("У примера уже есть подготовленный разбор.");
+    const proposal = await this.labFormProposal(doc, await this.d.repo.listVersions(profileId, documentId));
+    if (!proposal) throw new ValidationError("Шаблон бланка не распознан: этот документ можно разобрать только с помощью модели.");
+    await this.d.repo.saveProposal(profileId, proposal);
+    const updated: SourceDocument = { ...doc, status: "review_pending", statusMessage: null };
+    await this.d.repo.saveDocument(updated);
+    return updated;
+  }
+
+  private readyMessage() {
+    return `Факты можно извлечь с помощью ${this.d.live!.provider} (${this.d.live!.model}). Документ будет отправлен только после вашего согласия.`;
+  }
+
+  /** The connected model, if any. */
+  liveModel(): { provider: string; model: string } | null {
+    return this.d.live ? { provider: this.d.live.provider, model: this.d.live.model } : null;
+  }
+
+  /**
+   * Sends one document to the connected model and stores its proposal for review.
+   * Requires explicit consent for this document; prepared examples are never sent.
+   */
+  async extractWithModel(profileId: string, documentId: string, consent: boolean): Promise<SourceDocument> {
+    const doc = await this.d.repo.getDocument(profileId, documentId);
+    if (!doc) throw new NotFoundError("Документ не найден");
+    if (!this.d.live) throw new ValidationError("Модель не подключена: укажите ключ API в .env.local.");
+    if (!consent) throw new ValidationError("Нужно согласие на отправку документа.");
+    if (doc.sampleKey) throw new ValidationError("У примера уже есть подготовленный разбор; он не отправляется модели.");
+    // A repeated extraction (status applied or review_pending) is allowed: matching facts are merged, not duplicated.
+    const versions = await this.d.repo.listVersions(profileId, documentId);
+    const bytes = doc.original ? await this.d.files.get(doc.original.sha256) : null;
+    const ex = await this.d.live.extractor.extract({ document: doc, versions, original: bytes && doc.original ? { bytes, mime: doc.original.mime } : null });
+    if (!ex.ok) {
+      const failed: SourceDocument = { ...doc, status: "extraction_ready", statusMessage: `${ex.message} Оригинал сохранён; можно попробовать ещё раз.` };
+      await this.d.repo.saveDocument(failed);
+      throw new ExternalServiceError(ex.message);
+    }
+    await this.d.repo.saveProposal(profileId, ex.proposal);
+    const updated: SourceDocument = { ...doc, status: "review_pending", statusMessage: null };
+    await this.d.repo.saveDocument(updated);
+    return updated;
   }
 
   /**
@@ -361,13 +526,31 @@ export class HealthService {
 
     const facts = await this.d.repo.listFacts(profileId);
     const byKey = new Map(facts.map((f) => [f.dedupKey, f]));
+    // Facts a model extracted from this document before, by what they say: a repeated extraction merges into them.
+    const llmKey = (f: Pick<Fact, "type" | "label" | "value">) => `llm:${documentId}:${contentKey(f)}`;
+    for (const f of facts) {
+      if ((f.extraction.method === "llm" || f.extraction.method === "parser") && f.sources.some((s) => s.documentId === documentId) && !byKey.has(llmKey(f))) byKey.set(llmKey(f), f);
+    }
+    // One measurement printed in several forms (a panel and its separate blank, a re-issued form) is one fact with several sources.
+    const measurementKey = (f: Pick<Fact, "value" | "eventDate">) =>
+      f.value.kind === "lab_result" && f.value.origin === "lab_report" && f.eventDate.kind === "exact"
+        ? `${indicatorOf(f.value)}|${f.eventDate.date}|${f.value.value.raw.replace(/\s+/g, "").replace(",", ".")}|${normalizeUnit(f.value.unit)}`
+        : null;
+    const byMeasurement = new Map<string, Fact>();
+    for (const f of facts) {
+      const k = measurementKey(f);
+      if (k && f.verification !== "rejected" && !byMeasurement.has(k)) byMeasurement.set(k, f);
+    }
     const touched = new Map<string, Fact>();
 
     const materialize = (draft: FactDraft): Fact => {
-      const prev = touched.get(draft.dedupKey) ?? byKey.get(draft.dedupKey);
+      const mk = measurementKey(draft);
+      const sameMeasurement = mk ? byMeasurement.get(mk) : undefined;
+      const prev = touched.get(draft.dedupKey) ?? byKey.get(draft.dedupKey) ?? (sameMeasurement && (touched.get(sameMeasurement.dedupKey) ?? sameMeasurement));
       if (prev) {
         let f = prev;
         for (const s of draft.sources) f = addSource(f, s, at);
+        if (draft.extraction.method === "llm" || draft.extraction.method === "parser") f = fillMissingDates(f, draft.eventDate, draft.documentDate, at);
         return f;
       }
       const { conflictsWith: _c, aboutKeys: _a, ...rest } = draft;
@@ -420,8 +603,52 @@ export class HealthService {
 
     for (const f of touched.values()) await this.d.repo.saveFact(f);
     await this.linkMentions(profileId, at);
-    const updated: SourceDocument = { ...doc, status: "applied", statusMessage: null, encounterId };
+    // A document uploaded as "other" takes its kind from the event it records.
+    const ENC_KIND = { visit: "consultation", lab: "lab_report", examination: "examination" } as const;
+    const kind = doc.kind === "other" && proposal.encounter ? ENC_KIND[proposal.encounter.kind] : doc.kind;
+    // A title that is just the file name is replaced by the name of the event the document records.
+    const fileTitle = doc.original ? doc.original.fileName.replace(/\.[^.]+$/, "") : null;
+    const title = proposal.encounter && doc.title === fileTitle ? proposal.encounter.title : doc.title;
+    const updated: SourceDocument = { ...doc, kind, title, status: "applied", statusMessage: null, encounterId, documentDate: doc.documentDate ?? proposal.documentDate ?? null };
     await this.d.repo.saveDocument(updated);
+    await this.fillFormDates(updated);
+    return this.getDocument(profileId, documentId);
+  }
+
+  /**
+   * Applies a document's proposal without a review card, for bulk upload. Facts are added unverified as always;
+   * changes to the current state are not accepted and clarifications stay open, so they wait for the user's decision.
+   * A form printed for another person is left for manual review.
+   */
+  async autoApply(profileId: string, documentId: string): Promise<{ document: SourceDocument; applied: boolean; added: number; decisions: number; reason: string | null }> {
+    const doc = await this.d.repo.getDocument(profileId, documentId);
+    if (!doc) throw new NotFoundError("Документ не найден");
+    const proposal = await this.d.repo.getProposal(profileId, documentId);
+    if (doc.status !== "review_pending" || !proposal) return { document: doc, applied: false, added: 0, decisions: 0, reason: "Нечего применять: фактов не предложено." };
+    if (proposal.items.some((i) => i.key === `llm:${documentId}:patient`))
+      return { document: doc, applied: false, added: 0, decisions: 1, reason: "Бланк выписан на другого человека: откройте документ и решите, относится ли он к профилю." };
+    const before = new Set((await this.d.repo.listFacts(profileId)).map((f) => f.id));
+    const result = await this.applyProposal(profileId, documentId, { acceptedStateChanges: [], postponedClarifications: [] });
+    return {
+      document: result.document,
+      applied: true,
+      added: result.facts.filter((f) => !before.has(f.id)).length,
+      decisions: proposal.items.filter((i) => i.group !== "history").length,
+      reason: null,
+    };
+  }
+
+  /** Sets or clears the document date; facts from this document that carried the old date get the new one. */
+  async setDocumentDate(profileId: string, documentId: string, date: string | null) {
+    const doc = await this.d.repo.getDocument(profileId, documentId);
+    if (!doc) throw new NotFoundError("Документ не найден");
+    const next = date ? normalizeIsoDate(date) : null;
+    if (next === undefined) throw new ValidationError("Дата должна быть в формате ГГГГ-ММ-ДД или ДД.ММ.ГГГГ");
+    const facts = await this.d.repo.listFacts(profileId);
+    for (const f of facts) {
+      if (f.sources.some((s) => s.documentId === documentId) && f.documentDate === doc.documentDate) await this.d.repo.saveFact({ ...f, documentDate: next });
+    }
+    await this.d.repo.saveDocument({ ...doc, documentDate: next });
     return this.getDocument(profileId, documentId);
   }
 
@@ -547,8 +774,25 @@ export class HealthService {
 
   // ---------- Derived views ----------
 
+  /** Overview for a doctor from stored facts only. */
+  async doctorSummary(profileId: string) {
+    return buildDoctorSummary(await this.listFacts(profileId), await this.d.repo.listDocuments(profileId), this.now().slice(0, 10));
+  }
+
+  /** Everything waiting for the user's decision, across all documents. */
+  async decisions(profileId: string) {
+    const docs = await this.d.repo.listDocuments(profileId);
+    const withPatient = await Promise.all(
+      docs.map(async (document) => ({
+        document,
+        otherPatient: !!(await this.d.repo.getProposal(profileId, document.id))?.items.some((i) => i.key === `llm:${document.id}:patient`),
+      })),
+    );
+    return buildDecisions(await this.listFacts(profileId), withPatient, this.now().slice(0, 10));
+  }
+
   async state(profileId: string) {
-    return buildState(await this.listFacts(profileId));
+    return buildState(await this.listFacts(profileId), this.now().slice(0, 10));
   }
 
   async indicators(profileId: string) {
@@ -568,7 +812,7 @@ export class HealthService {
       this.d.repo.listDocuments(profileId),
       this.d.repo.listEncounters(profileId),
     ]);
-    return groupTimeline(buildTimeline(facts, docs, encs), groupBy);
+    return groupTimeline(buildTimeline(facts, docs, encs, this.now().slice(0, 10)), groupBy);
   }
 
   // ---------- Chat ----------
@@ -578,15 +822,22 @@ export class HealthService {
     return this.d.repo.listMessages(profileId);
   }
 
-  async ask(profileId: string, question: string): Promise<ChatMessage[]> {
+  /** useModel: the user agreed to send the question and the selected facts to the connected model. */
+  async ask(profileId: string, question: string, opts: { useModel?: boolean } = {}): Promise<ChatMessage[]> {
     await this.profile(profileId);
     const q = question.trim();
     if (!q) throw new ValidationError("Вопрос пустой");
+    if (opts.useModel && !this.d.live) throw new ValidationError("Модель не подключена: укажите ключ API в .env.local.");
     const facts = await this.d.repo.listFacts(profileId);
-    const state = buildState(facts);
+    const state = buildState(facts, this.now().slice(0, 10));
     const retrieval = retrieveFacts(q, facts);
     const request = buildLlmRequest(q, retrieval.facts.map((r) => r.fact), stateToText(state));
-    const answer = await this.d.llm.answer(request);
+    let answer;
+    try {
+      answer = await (opts.useModel ? this.d.live!.chat : this.d.llm).answer(request);
+    } catch (e) {
+      throw new ExternalServiceError(e instanceof Error && e.message ? e.message : "Модель не ответила.");
+    }
     const at = this.now();
     const userMsg: ChatMessage = { id: this.d.ids.next("msg"), profileId, role: "user", text: q, segments: [], usedContext: [], mode: null, createdAt: at };
     const reasons = new Map(retrieval.facts.map((r) => [r.fact.id, r.reason]));

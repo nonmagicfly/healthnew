@@ -1,8 +1,10 @@
 // Creates an empty personal samples file when it is missing (it is git-ignored and never committed).
 import { existsSync, writeFileSync } from "node:fs";
 
-const file = new URL("../src/adapters/samples/personal.local.ts", import.meta.url);
-if (!existsSync(file)) {
+const dir = new URL("../src/adapters/samples/", import.meta.url);
+const file = new URL("personal.local.ts", dir);
+// During a Docker build postinstall runs before the sources are copied; prebuild creates the file later.
+if (existsSync(dir) && !existsSync(file)) {
   writeFileSync(
     file,
     `// Личные примеры с подготовленным разбором. Файл не хранится в Git.

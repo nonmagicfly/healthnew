@@ -19,11 +19,14 @@
     "postinstall": "node scripts/ensure-local-samples.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.135.0",
     "next": "16.4.2",
+    "openai": "^7.39.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "server-only": "^0.0.1",
-    "unpdf": "^1.9.0"
+    "unpdf": "^1.9.0",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@fission-ai/openspec": "^1.14.3",

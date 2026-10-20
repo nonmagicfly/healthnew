@@ -9,6 +9,7 @@ import { Badge, Card, Empty, ErrorState, Loading } from "./common";
 
 const KIND_LABEL: Record<string, string> = {
   visit: "Визит",
+  planned: "Запланировано",
   lab: "Анализ",
   examination: "Обследование",
   symptom: "Симптом",

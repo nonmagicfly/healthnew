@@ -9,13 +9,15 @@ async function useProfile(page: Page, id: "me" | "demo") {
 }
 
 /** Presses Tab until an element whose accessible text matches is focused. */
-async function tabTo(page: Page, text: RegExp, max = 120) {
+// `selector` narrows the match when a focusable container (e.g. a scrollable list) also contains the text.
+async function tabTo(page: Page, text: RegExp, max = 120, selector = "*") {
   for (let i = 0; i < max; i++) {
     await page.keyboard.press("Tab");
-    const label = await page.evaluate(() => {
+    const label = await page.evaluate((sel) => {
       const el = document.activeElement as HTMLElement | null;
-      return el ? `${el.getAttribute("aria-label") ?? ""} ${el.textContent ?? ""} ${(el as HTMLInputElement).placeholder ?? ""}` : "";
-    });
+      if (!el?.matches(sel)) return "";
+      return `${el.getAttribute("aria-label") ?? ""} ${el.textContent ?? ""} ${(el as HTMLInputElement).placeholder ?? ""}`;
+    }, selector);
     if (text.test(label)) return;
   }
   throw new Error(`Could not reach ${text} with Tab`);
@@ -69,7 +71,7 @@ test("key scenario on a prepared example in the user's profile", async ({ page }
   // Ask a question and get a demo answer with sources and used context.
   await page.getByRole("link", { name: "Чат", exact: true }).click();
   await page.getByRole("button", { name: "Какие препараты мне назначали?" }).click();
-  await expect(page.getByText("Демонстрационный ответ: LLM не подключена")).toBeVisible();
+  await expect(page.getByText("Ответ по шаблону, без модели")).toBeVisible();
   await expect(page.getByText(/Омепразол, дозировка не указана: назначен врачом, приём не подтверждён/)).toBeVisible();
   await expect(page.getByText(/не означают, что препарат нужно принимать сейчас/)).toBeVisible();
   await page.getByText(/Какой контекст учтён/).click();
@@ -123,7 +125,7 @@ test("keyboard-only walkthrough in the demo profile", async ({ page }) => {
   await page.keyboard.type("Как менялся ферритин?");
   await page.keyboard.press("Enter");
   await expect(page.getByText(/Ферритин изменился с 310 до 180/)).toBeVisible();
-  await tabTo(page, /Какой контекст учтён/);
+  await tabTo(page, /Какой контекст учтён/, 120, "summary");
   await page.keyboard.press("Enter");
   await expect(page.getByText("Относится к показателю из вопроса").first()).toBeVisible();
 
@@ -148,9 +150,84 @@ test("arbitrary upload is stored honestly, duplicates and errors are explained",
 
   await page.goto("/documents");
   await page.getByLabel(/Файл \(PDF/).setInputFiles(file);
-  await expect(page.getByText(/Этот файл уже был загружен/)).toBeVisible();
+  await expect(page.getByText(/Этот документ уже был загружен/)).toBeVisible();
 
   await page.goto("/documents");
   await page.getByLabel(/Файл \(PDF/).setInputFiles({ name: "empty.txt", mimeType: "text/plain", buffer: Buffer.from("") });
   await expect(page.getByRole("alert").filter({ hasText: "Файл пустой" })).toBeVisible();
+});
+
+test("several files are uploaded at once, each with its own result", async ({ page }) => {
+  await useProfile(page, "me");
+  await page.goto("/documents");
+  const txt = (name: string, text: string) => ({ name, mimeType: "text/plain", buffer: Buffer.from(text) });
+  await page.getByLabel(/Файл \(PDF/).setInputFiles([
+    txt("приём-1.txt", "[00:00:05] Врач: Как самочувствие?\n[00:00:10] Пациент: Хорошо."),
+    txt("приём-2.txt", "[00:00:05] Врач: Сдайте анализ крови."),
+    txt("пустой.txt", ""),
+    txt(
+      "бланк.txt",
+      [
+        "ТЕСТОВФамилия: Дата: 01.03.2026",
+        "Наименование исследования Результат Ед. изм. Нормальные значенияФлаг",
+        "(HGB) Гемоглобин г/л 132-173141",
+        "Железо мкмоль/л 9.0-21.5↑ 24.1",
+      ].join("\n"),
+    ),
+  ]);
+  const list = page.getByRole("list").filter({ hasText: "приём-1.txt" });
+  await expect(list.getByRole("listitem").filter({ hasText: "приём-1.txt" })).toContainText("загружен");
+  await expect(list.getByRole("listitem").filter({ hasText: "приём-2.txt" })).toContainText("загружен");
+  await expect(list.getByRole("listitem").filter({ hasText: "пустой.txt" })).toContainText("Файл пустой");
+  // A lab form of a known layout is parsed locally and added to the history without a review card.
+  await expect(list.getByRole("listitem").filter({ hasText: "бланк.txt" })).toContainText("добавлен в историю");
+  await expect(page.getByText(/Добавлено в историю: документов 1, новых фактов 2/)).toBeVisible();
+  // Without a connected model there is nothing to send.
+  await expect(page.getByText(/извлечь факты из всех/i)).toHaveCount(0);
+  await list.getByRole("link", { name: "приём-2.txt" }).click();
+  await expect(page).toHaveURL(/\/documents\/.+/);
+});
+
+test("documents waiting for review are added to the history with one button", async ({ page }) => {
+  await useProfile(page, "me");
+  await page.goto("/documents");
+  const form = ["ТЕСТОВФамилия: Дата: 02.03.2026", "Наименование исследования Результат Ед. изм. Нормальные значенияФлаг", "Железо мкмоль/л 9.0-21.5↑ 25.3"].join("\n");
+  await page.getByLabel(/Файл \(PDF/).setInputFiles([{ name: "один-бланк.txt", mimeType: "text/plain", buffer: Buffer.from(form) }]);
+  await expect(page).toHaveURL(/\/documents\/.+/);
+  await page.goto("/documents");
+  await page.getByRole("button", { name: "Добавить все в историю" }).click();
+  await expect(page.getByText(/Добавлено в историю: документов 1, новых фактов 1/)).toBeVisible();
+});
+
+test("decisions left by documents are made on one screen", async ({ page }) => {
+  await useProfile(page, "me");
+  await page.goto("/documents");
+  await page.getByRole("listitem").filter({ hasText: "Консультация терапевта" }).getByRole("button", { name: "Открыть пример" }).click();
+  await expect(page.getByRole("heading", { name: "Консультация терапевта" })).toBeVisible();
+  // The example may already be applied by an earlier scenario in the same data directory.
+  const apply = page.getByRole("button", { name: "Применить" });
+  if (await apply.isVisible()) await apply.click();
+  await expect(page.getByRole("heading", { name: /Извлечённые факты/ })).toBeVisible();
+
+  await page.getByRole("link", { name: /^Решения/ }).click();
+  await expect(page.getByRole("heading", { name: /Препараты из документов/ })).toBeVisible();
+  const omeprazole = page.getByRole("group", { name: /Действия: Омепразол/ });
+  await omeprazole.getByRole("button", { name: "Не принимаю" }).click();
+  await expect(omeprazole).toHaveCount(0);
+});
+
+test("doctor summary lists the latest lab results with the lab's reference", async ({ page }) => {
+  await useProfile(page, "me");
+  await page.goto("/documents");
+  const form = ["ТЕСТОВФамилия: Дата: 03.03.2026", "Наименование исследования Результат Ед. изм. Нормальные значенияФлаг", "Железо мкмоль/л 9.0-21.5↑ 23.0", "(HGB) Гемоглобин г/л 132-173140"].join("\n");
+  await page.getByLabel(/Файл \(PDF/).setInputFiles([
+    { name: "сводка-1.txt", mimeType: "text/plain", buffer: Buffer.from(form) },
+    { name: "сводка-2.txt", mimeType: "text/plain", buffer: Buffer.from(form.replace("03.03.2026", "04.04.2026").replace("23.0", "19.5")) },
+  ]);
+  await expect(page.getByText(/Добавлено в историю: документов 2/)).toBeVisible();
+  await page.getByRole("link", { name: "Сводка для врача" }).click();
+  const iron = page.getByRole("row").filter({ hasText: "Железо сывороточное" });
+  await expect(iron).toContainText("19.5 мкмоль/л");
+  await expect(iron).toContainText("23.0 от 03.03.2026, ↓ ниже прошлого");
+  await expect(page.getByRole("button", { name: "Печать или PDF" })).toBeVisible();
 });

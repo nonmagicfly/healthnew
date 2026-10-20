@@ -4,21 +4,26 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { ProfileProvider, useProfile } from "./profile";
+import { useApi } from "./api";
+import type { Decisions } from "@/core/rules/decisions";
 
 const NAV = [
   { href: "/", label: "Моё состояние" },
   { href: "/indicators", label: "Показатели" },
   { href: "/documents", label: "Документы" },
+  { href: "/decisions", label: "Решения" },
   { href: "/history", label: "История" },
   { href: "/chat", label: "Чат" },
+  { href: "/summary", label: "Сводка для врача" },
 ];
 
 function Header() {
-  const { profiles, profile, setProfileId } = useProfile();
+  const { profiles, profile, setProfileId, liveModel, base, version } = useProfile();
+  const pending = useApi<Decisions>(`${base}/decisions`, version).data?.total ?? 0;
   const path = usePathname();
   const active = (href: string) => (href === "/" ? path === "/" : path.startsWith(href));
   return (
-    <header className="border-b border-slate-200 bg-white">
+    <header className="border-b border-slate-200 bg-white print:hidden">
       <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-4 px-4 py-3">
         <Link href="/" className="text-lg font-semibold text-slate-900">
           История здоровья
@@ -32,6 +37,11 @@ function Header() {
               className={`rounded-md px-3 py-1.5 text-sm ${active(n.href) ? "bg-teal-700 text-white" : "text-slate-700 hover:bg-slate-100"}`}
             >
               {n.label}
+              {n.href === "/decisions" && pending > 0 && (
+                <span className="ml-1 rounded-full bg-amber-500 px-1.5 text-xs font-semibold text-white" aria-label={`ждут решения: ${pending}`}>
+                  {pending}
+                </span>
+              )}
             </Link>
           ))}
         </nav>
@@ -56,7 +66,9 @@ function Header() {
           {profile?.isDemo ? (
             <strong>Демо-профиль: синтетические данные. </strong>
           ) : null}
-          Прототип в демонстрационном режиме: разбор документов подготовлен заранее только для встроенных примеров, ответы чата собираются по шаблону, LLM и OCR не подключены. Данные хранятся только на этом компьютере.
+          {liveModel
+            ? `Подключена модель ${liveModel.provider} (${liveModel.model}). Документы и вопросы отправляются ей только по вашему явному действию; остальные данные хранятся только на этом компьютере.`
+            : "Прототип в демонстрационном режиме: разбор документов подготовлен заранее только для встроенных примеров, ответы чата собираются по шаблону, LLM и OCR не подключены. Данные хранятся только на этом компьютере."}
         </p>
       </div>
     </header>

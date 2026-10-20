@@ -1,7 +1,8 @@
 import type { Fact, ISODate, LabResultValue, Reference } from "../model";
-import { indicatorByCode, INDICATORS, type IndicatorDef } from "../indicators";
+import { indicatorByCode, indicatorOf, INDICATORS, qualitativeIndicatorOf, type IndicatorDef } from "../indicators";
 import { formatDateValue, inPeriod, sortableDate } from "./dates";
 import { plottableNumber, referenceFlag, seriesKey } from "./lab-values";
+import { unescapeModelText } from "./llm-request";
 
 export interface SeriesPoint {
   factId: string;
@@ -38,6 +39,8 @@ export interface IndicatorRow {
   documentId: string;
   plotted: boolean;
   notPlottedReason: string | null;
+  /** Compared with the lab's own reference only; no medical interpretation. */
+  flag: ReturnType<typeof referenceFlag>;
 }
 
 export interface TimelineMark {
@@ -73,7 +76,7 @@ export function buildIndicatorView(
   const indicator = indicatorByCode(code);
   if (!indicator) return null;
   const facts = allFacts.filter((f) => f.verification !== "rejected");
-  const labs = facts.filter(isLab).filter((f) => f.value.indicator === code);
+  const labs = facts.filter(isLab).filter((f) => indicatorOf(f.value) === code);
 
   const seriesMap = new Map<string, Series>();
   const rows: IndicatorRow[] = [];
@@ -94,7 +97,7 @@ export function buildIndicatorView(
       raw: f.value.value.raw,
       valueType: f.value.value.type,
       unit: f.value.unit,
-      reference: f.value.reference?.raw ?? null,
+      reference: f.value.reference ? unescapeModelText(f.value.reference.raw) : null,
       method: f.value.method,
       collected: formatDateValue(f.eventDate),
       documentDate: f.documentDate,
@@ -103,6 +106,7 @@ export function buildIndicatorView(
       documentId: f.sources[0].documentId,
       plotted,
       notPlottedReason: reason ?? (inRange ? null : "Вне выбранного периода"),
+      flag: referenceFlag(f.value.value, f.value.reference),
     });
 
     if (!plotted || x === null) continue;
@@ -125,7 +129,7 @@ export function buildIndicatorView(
   for (const s of seriesMap.values()) s.points.sort((a, b) => a.date.localeCompare(b.date));
 
   const qualitative = facts
-    .filter((f) => f.type === "qualitative_finding" && f.value.kind === "qualitative" && f.value.indicator === code)
+    .filter((f) => f.type === "qualitative_finding" && f.value.kind === "qualitative" && qualitativeIndicatorOf(f.value.indicator) === code)
     .map((f) => ({
       factId: f.id,
       text: f.value.kind === "qualitative" ? f.value.text : f.label,
@@ -168,8 +172,13 @@ export interface IndicatorSummary {
 /** Indicators that have any data in the profile, priority indicators always listed first. */
 export function listIndicators(allFacts: Fact[]): IndicatorSummary[] {
   const facts = allFacts.filter((f) => f.verification !== "rejected");
-  return INDICATORS.map((i) => {
-    const labs = facts.filter(isLab).filter((f) => f.value.indicator === i.code);
+  // Lab names outside the catalog are listed too, under their own name.
+  const extra = [...new Set(facts.filter(isLab).map((f) => indicatorOf(f.value)))]
+    .filter((c) => !INDICATORS.some((i) => i.code === c))
+    .map((c) => indicatorByCode(c)!)
+    .sort((a, b) => a.name.localeCompare(b.name, "ru"));
+  return [...INDICATORS, ...extra].map((i) => {
+    const labs = facts.filter(isLab).filter((f) => indicatorOf(f.value) === i.code);
     return {
       code: i.code,
       name: i.name,
@@ -177,7 +186,7 @@ export function listIndicators(allFacts: Fact[]): IndicatorSummary[] {
       priority: i.priority,
       results: labs.filter((f) => f.value.origin === "lab_report").length,
       mentions: labs.filter((f) => f.value.origin === "mention").length,
-      qualitative: facts.filter((f) => f.value.kind === "qualitative" && f.value.indicator === i.code).length,
+      qualitative: facts.filter((f) => f.value.kind === "qualitative" && qualitativeIndicatorOf(f.value.indicator) === i.code).length,
     };
   }).filter((s) => s.priority || s.results + s.mentions + s.qualitative > 0);
 }
@@ -192,7 +201,7 @@ export function findMatchingResult(mention: Fact, candidates: Fact[]): Fact | nu
   const n = plottableNumber(mv.value);
   if (n === null) return null;
   for (const c of candidates) {
-    if (!isLab(c) || c.value.origin !== "lab_report" || c.value.indicator !== mv.indicator) continue;
+    if (!isLab(c) || c.value.origin !== "lab_report" || indicatorOf(c.value) !== indicatorOf(mv)) continue;
     if (plottableNumber(c.value.value) !== n) continue;
     if (mv.unit && c.value.unit && seriesKey("x", mv.unit, null) !== seriesKey("x", c.value.unit, null)) continue;
     const cd = sortableDate(c.eventDate) ?? c.documentDate;

@@ -1,0 +1,16 @@
+# Run the app in Docker on this computer: `docker compose up --build`, then open http://localhost:3000.
+# Uses the same ./data folder as `npm run dev` (do not run both at once).
+# Model keys, if any, are read from .env.local; without it the app stays in demo mode.
+services:
+  app:
+    build: .
+    image: health-app:local
+    restart: unless-stopped
+    ports:
+      # Only reachable from this computer.
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./data:/data
+    env_file:
+      - path: .env.local
+        required: false

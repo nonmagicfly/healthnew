@@ -12,7 +12,7 @@ import { api, postJson, useApi } from "./api";
 import { FactEditor } from "./fact-editor";
 import type { FactAction } from "@/core/service";
 import { useProfile } from "./profile";
-import { Badge, Card, DemoBadge, DOC_KIND_LABEL, Empty, ErrorState, formatIso, Loading, STATUS_LABEL } from "./common";
+import { Badge, Card, DemoBadge, DOC_KIND_LABEL, Empty, ErrorState, formatDateTime, formatIso, Loading, STATUS_LABEL } from "./common";
 
 interface Detail {
   document: SourceDocument;
@@ -240,7 +240,9 @@ function FactCard({ f, docId, focused }: { f: Fact; docId: string; focused: bool
       <p className="mt-0.5 text-xs text-slate-500">
         Дата события: {formatDateValue(f.eventDate)} · Дата документа: {formatIso(f.documentDate)} · Проверка:{" "}
         {{ unverified: "не проверено вами", confirmed: "подтверждено", corrected: "исправлено вами", rejected: "отклонено" }[f.verification]} · Извлечение:{" "}
-        {{ prepared: "подготовленный разбор", parser: "разбор текста", manual: "вручную" }[f.extraction.method]}
+        {f.extraction.method === "llm"
+          ? `модель ${f.extraction.model ?? ""}`.trim()
+          : { prepared: "подготовленный разбор", parser: "разбор текста", manual: "вручную" }[f.extraction.method]}
       </p>
       <SourceQuote f={f} docId={docId} />
       {f.type !== "clarification" && !editing && (
@@ -305,9 +307,19 @@ function ProposalCard({ detail, onApplied }: { detail: Detail; onApplied: () => 
     }
   };
 
+  const fromModel = items.some((i) => i.draft.extraction.method === "llm");
+  const fromParser = items.some((i) => i.draft.extraction.method === "parser");
+  const proposedDate = detail.proposal!.documentDate;
+  const patientName = detail.proposal!.patientName;
 
   return (
-    <Card title="Что изменится после применения" actions={<DemoBadge>Подготовленный разбор</DemoBadge>}>
+    <Card title="Что изменится после применения" actions={fromModel ? <Badge tone="blue">Предложено моделью</Badge> : fromParser ? <Badge tone="green">Разобрано по шаблону, без модели</Badge> : <DemoBadge>Подготовленный разбор</DemoBadge>}>
+      {patientName && <p className="mb-2 text-sm text-slate-700">Пациент в бланке: {patientName}</p>}
+      {proposedDate && (
+        <p className="mb-2 rounded bg-sky-50 p-2 text-sm text-sky-900">
+          Дата документа из текста: {formatIso(proposedDate)}. Она будет сохранена при применении; изменить её можно в заголовке документа.
+        </p>
+      )}
       <Section title={`Предлагается изменить текущее состояние (${group("state_change").length})`} hint="Изменится только то, что вы отметите. Без отметки сведение попадёт только в историю.">
         {group("state_change").map((i) => (
           <li key={i.key} className="rounded border border-teal-200 bg-teal-50/40 p-2 text-sm">
@@ -381,14 +393,15 @@ export function DocumentDetailView() {
         <h1 className="mt-1 text-xl font-semibold">{d.title}</h1>
         <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-slate-600">
           <span>{DOC_KIND_LABEL[d.kind]}</span>
-          <span>Дата документа: {formatIso(d.documentDate)}</span>
+          <DocumentDate doc={d} onSaved={bump} />
+          <span>Загружен: {formatDateTime(d.createdAt)}</span>
           {d.specialist && <span>{d.specialist}</span>}
           <Badge tone={st.tone}>{st.text}</Badge>
           {d.isSynthetic && <DemoBadge>Синтетический документ</DemoBadge>}
         </div>
         {search.get("duplicate") && (
           <p role="status" className="mt-2 rounded bg-sky-50 p-2 text-sm text-sky-900">
-            Этот файл уже был загружен. Открыт существующий документ, дубль не создан.
+            Этот документ уже был загружен (тот же файл или копия с тем же текстом). Открыт существующий документ, дубль не создан.
           </p>
         )}
         {d.preparedNotice && <p className="mt-2 rounded bg-amber-50 p-2 text-sm text-amber-900">{d.preparedNotice}</p>}
@@ -408,11 +421,15 @@ export function DocumentDetailView() {
         <SourcePane key={focusId ?? "none"} detail={detail.data} focusFact={focusFact} focusSegment={focusSegment} />
         <div className="space-y-4">
           {d.status === "review_pending" && detail.data.proposal && <ProposalCard detail={detail.data} onApplied={bump} />}
+          {canParseLocally(d) && <LocalParse doc={d} onDone={bump} />}
+          {canSendToModel(d) && <ModelExtract doc={d} onDone={bump} />}
           {d.status !== "review_pending" && (
             <Card title={`Извлечённые факты (${detail.data.facts.length})`}>
               {detail.data.facts.length === 0 ? (
                 <Empty>
-                  {d.status === "extraction_unavailable" || d.status === "recognition_unavailable"
+                  {d.status === "extraction_ready"
+                    ? "Факты ещё не извлечены. Оригинал сохранён; текст, если он есть, доступен слева."
+                    : d.status === "extraction_unavailable" || d.status === "recognition_unavailable"
                     ? "Извлечение фактов для этого файла не подключено. Оригинал сохранён; текст, если он есть, доступен слева."
                     : "Фактов нет."}
                 </Empty>
@@ -441,5 +458,129 @@ export function DocumentDetailView() {
         </div>
       </div>
     </div>
+  );
+}
+
+const SENDABLE: SourceDocument["status"][] = ["extraction_ready", "extraction_unavailable", "recognition_unavailable", "error", "applied"];
+
+function canSendToModel(d: SourceDocument) {
+  return !d.sampleKey && SENDABLE.includes(d.status);
+}
+
+/** Sends one document to the connected model, only after the user ticks the consent box. */
+function ModelExtract({ doc, onDone }: { doc: SourceDocument; onDone: () => void }) {
+  const { liveModel, base } = useProfile();
+  const [agreed, setAgreed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (!liveModel) return null;
+  const again = doc.status === "applied";
+  const send = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await postJson(`${base}/documents/${doc.id}/extract`, { consent: true });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+      onDone();
+    }
+  };
+  return (
+    <Card title={again ? "Извлечь факты заново" : "Извлечь факты с помощью модели"}>
+      {again && (
+        <p className="mb-2 text-sm text-slate-700">
+          Модель прочитает документ ещё раз. Совпадающие факты не задвоятся, а недостающие даты дополнятся; исправленное вами не изменится, добавленные ранее факты останутся.
+        </p>
+      )}
+      <p className="text-sm text-slate-700">
+        Текст документа (а для PDF без текстового слоя сам файл) будет отправлен в {liveModel.provider}, модель {liveModel.model}. Модель только предлагает факты: вы увидите их в карточке и решите, что добавить. Без вашего согласия ничего не отправляется.
+      </p>
+      <label className="mt-2 flex items-start gap-2 text-sm">
+        <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} className="mt-1" />
+        <span>Согласен отправить этот документ в {liveModel.provider}</span>
+      </label>
+      <button type="button" onClick={send} disabled={!agreed || busy} className="mt-2 rounded bg-teal-700 px-4 py-1.5 text-sm text-white disabled:opacity-50">
+        {busy ? "Модель читает документ…" : "Отправить и извлечь факты"}
+      </button>
+      {error && <p role="alert" className="mt-2 text-sm text-red-700">{error}</p>}
+    </Card>
+  );
+}
+
+/** Shows the document date with an inline editor; facts from this document get the new date too. */
+function DocumentDate({ doc, onSaved }: { doc: SourceDocument; onSaved: () => void }) {
+  const { base } = useProfile();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(doc.documentDate ?? "");
+  const [error, setError] = useState<string | null>(null);
+  if (!editing) {
+    return (
+      <span>
+        Дата документа: {formatIso(doc.documentDate)}{" "}
+        {!doc.sampleKey && (
+          <button type="button" className="text-teal-800 underline" onClick={() => { setValue(doc.documentDate ?? ""); setEditing(true); }}>
+            {doc.documentDate ? "изменить" : "указать"}
+          </button>
+        )}
+      </span>
+    );
+  }
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    try {
+      await api(`${base}/documents/${doc.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ documentDate: value || null }) });
+      setEditing(false);
+      onSaved();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+  return (
+    <form onSubmit={save} className="flex items-center gap-2">
+      <label className="flex items-center gap-1">
+        Дата документа
+        <input type="date" value={value} onChange={(e) => setValue(e.target.value)} className="rounded border border-slate-300 px-1 py-0.5" />
+      </label>
+      <button type="submit" className="rounded bg-teal-700 px-2 py-0.5 text-white">Сохранить</button>
+      <button type="button" className="underline" onClick={() => setEditing(false)}>Отмена</button>
+      {error && <span role="alert" className="text-red-700">{error}</span>}
+    </form>
+  );
+}
+
+function canParseLocally(d: SourceDocument) {
+  return !d.sampleKey && !!d.original && ["extraction_ready", "extraction_unavailable", "applied"].includes(d.status);
+}
+
+/** Tries the local lab-form parser: free, instant, and the document stays on this computer. */
+function LocalParse({ doc, onDone }: { doc: SourceDocument; onDone: () => void }) {
+  const { base } = useProfile();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const run = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await postJson(`${base}/documents/${doc.id}/parse`, {});
+      onDone();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Card title="Разобрать бланк без модели">
+      <p className="text-sm text-slate-700">
+        Бланки анализов известного вида разбираются прямо на этом компьютере: бесплатно и без отправки куда-либо. {doc.status === "applied" && "Совпадающие факты не задвоятся."}
+      </p>
+      <button type="button" onClick={run} disabled={busy} className="mt-2 rounded border border-teal-700 px-4 py-1.5 text-sm text-teal-800 disabled:opacity-50">
+        {busy ? "Разбираю…" : "Разобрать по шаблону"}
+      </button>
+      {error && <p role="alert" className="mt-2 text-sm text-red-700">{error}</p>}
+    </Card>
   );
 }

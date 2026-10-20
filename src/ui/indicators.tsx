@@ -33,6 +33,15 @@ function Chart({ view }: { view: IndicatorView }) {
   const x = (t: number) => PAD.l + ((t - x0) / (x1 - x0)) * (W - PAD.l - PAD.r);
   const y = (v: number) => H - PAD.b - ((v - y0) / (y1 - y0)) * (H - PAD.t - PAD.b);
   const ticks = [y0, (y0 + y1) / 2, y1];
+  // Treatment and symptom lines are numbered on the chart and named in the list below, so labels never overlap.
+  const markGroups: { date: string; marks: { n: number; mark: TimelineMark }[] }[] = [];
+  [...view.marks]
+    .sort((a, b) => a.date.localeCompare(b.date))
+    .forEach((mark, i) => {
+      const g = markGroups.find((x) => x.date === mark.date);
+      if (g) g.marks.push({ n: i + 1, mark });
+      else markGroups.push({ date: mark.date, marks: [{ n: i + 1, mark }] });
+    });
   const sameRef = view.series.length === 1 && new Set(view.series[0].points.map((p) => p.reference?.raw ?? "")).size === 1 ? view.series[0].points[0].reference : null;
 
   return (
@@ -58,15 +67,16 @@ function Chart({ view }: { view: IndicatorView }) {
             <title>Референс лаборатории: {sameRef.raw}</title>
           </rect>
         )}
-        {view.marks.map((m: TimelineMark, i) => {
-          const mx = x(toTime(m.date));
-          const right = mx > W - 160;
+        {markGroups.map((g) => {
+          const mx = x(toTime(g.date));
+          const treatment = g.marks.some((m) => m.mark.kind === "treatment");
+          const right = mx > W - 60;
           return (
-            <g key={m.factId}>
-              <title>{`${m.label}, ${formatIso(m.date)}`}</title>
-              <line x1={mx} x2={mx} y1={PAD.t} y2={H - PAD.b} stroke={m.kind === "treatment" ? "#b45309" : "#64748b"} strokeDasharray="4 3" />
-              <text x={right ? mx - 3 : mx + 3} y={PAD.t + 10 + (i % 3) * 12} textAnchor={right ? "end" : "start"} fontSize="10" fill={m.kind === "treatment" ? "#92400e" : "#475569"}>
-                {m.label.slice(0, 24)}
+            <g key={g.date}>
+              <title>{g.marks.map((m) => `${m.n}. ${m.mark.label}, ${formatIso(g.date)}`).join("\n")}</title>
+              <line x1={mx} x2={mx} y1={PAD.t} y2={H - PAD.b} stroke={treatment ? "#b45309" : "#64748b"} strokeDasharray="4 3" />
+              <text x={right ? mx - 3 : mx + 3} y={PAD.t + 10} textAnchor={right ? "end" : "start"} fontSize="10" fill={treatment ? "#92400e" : "#475569"}>
+                {g.marks.map((m) => m.n).join(",")}
               </text>
             </g>
           );
@@ -110,6 +120,17 @@ function Chart({ view }: { view: IndicatorView }) {
         {view.marks.length > 0 && <span>Пунктир: лечение и симптомы. Совпадение по времени не доказывает причинную связь.</span>}
         {sameRef && <span>Заливка: референс лаборатории {sameRef.raw}.</span>}
       </figcaption>
+      {markGroups.length > 0 && (
+        <ol className="mt-2 grid gap-x-4 text-xs text-slate-600 sm:grid-cols-2">
+          {markGroups.flatMap((g) =>
+            g.marks.map((m) => (
+              <li key={m.mark.factId}>
+                {m.n}. {m.mark.label}, {formatIso(g.date)} <span className="text-slate-400">({m.mark.kind === "treatment" ? "лечение" : "симптом"})</span>
+              </li>
+            )),
+          )}
+        </ol>
+      )}
     </figure>
   );
 }
@@ -171,6 +192,8 @@ export function IndicatorDetail({ code, period }: { code: string; period: { from
                 <tr key={r.factId} className="border-t border-slate-100 align-top">
                   <td className="py-1.5 pr-3 font-medium">
                     {r.raw} <span className="text-xs font-normal text-slate-500">({VALUE_TYPE[r.valueType]})</span>
+                    {r.flag === "high" && <Badge tone="amber">выше референса</Badge>}
+                    {r.flag === "low" && <Badge tone="amber">ниже референса</Badge>}
                   </td>
                   <td className="py-1.5 pr-3">{r.unit ?? <span className="text-slate-500">не указаны</span>}</td>
                   <td className="py-1.5 pr-3">{r.reference ?? "—"}</td>
