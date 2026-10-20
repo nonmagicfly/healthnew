@@ -316,7 +316,7 @@ export function IndicatorSummaryCard() {
                 {i.name}
               </Link>
               <span className="text-slate-600">
-                {i.results} рез. бланков · {i.mentions} упоминаний · {i.qualitative} без числа
+                {counts(i)}
               </span>
             </li>
           ))}
@@ -324,4 +324,22 @@ export function IndicatorSummaryCard() {
       )}
     </Card>
   );
+}
+
+/** «1 результат», «3 результата», «5 результатов». */
+function plural(n: number, one: string, few: string, many: string) {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  return `${n} ${m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14) ? few : many}`;
+}
+
+/** Only what there is: an empty count says nothing and reads like a problem. */
+function counts(i: { results: number; mentions: number; qualitative: number }) {
+  return [
+    i.results > 0 && `${plural(i.results, "результат", "результата", "результатов")} в бланках`,
+    i.mentions > 0 && `${plural(i.mentions, "упоминание", "упоминания", "упоминаний")} у врача`,
+    i.qualitative > 0 && `${plural(i.qualitative, "запись", "записи", "записей")} без числа`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
