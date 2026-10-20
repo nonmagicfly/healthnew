@@ -48,6 +48,7 @@ import { normalizeUnit, parseLabValue } from "./rules/lab-values";
 import { indicatorOf } from "./indicators";
 import { contentKey, normalizeIsoDate, proposalFromExtraction } from "./rules/extraction";
 import { parseLabForm } from "./rules/lab-form";
+import { parseConsultation } from "./rules/consultation";
 import { applyLabels, deriveLabels } from "./rules/labels";
 
 export class NotFoundError extends Error {}
@@ -437,7 +438,8 @@ export class HealthService {
   /** Proposal from the local lab-form parser, or null when the layout is not recognized. */
   private async labFormProposal(doc: SourceDocument, versions: ContentVersion[]): Promise<Proposal | null> {
     const text = versions.find((v) => v.method === "pdf_text_layer" || v.method === "plain_text" || v.method === "transcript_parser");
-    const parsed = text ? parseLabForm(text.pages) : null;
+    // A lab form or a consultation of a known layout; anything else is left for the model.
+    const parsed = text ? (parseLabForm(text.pages) ?? parseConsultation(text.pages)) : null;
     if (!parsed) return null;
     const proposal = proposalFromExtraction(doc, versions, parsed, null, "parser");
     proposal.patientName = parsed.patientName;
@@ -458,7 +460,7 @@ export class HealthService {
       proposal.items.unshift({
         key,
         group: "clarify",
-        explanation: owner ? `ФИО в бланке совпадает с профилем «${owner.name}».` : "ФИО в бланке отличается от других документов профиля.",
+        explanation: owner ? `ФИО в документе совпадает с профилем «${owner.name}».` : "ФИО в документе отличается от других документов профиля.",
         draft: {
           type: "clarification",
           label: `Бланк выписан на «${parsed.patientName}». Это документ этого профиля?`,
@@ -482,7 +484,7 @@ export class HealthService {
   /** Fills missing dates of every lab form already in the profiles; runs at startup and after each upload. */
   async fillAllFormDates(profileId?: string) {
     const profiles = profileId ? [profileId] : (await this.d.repo.listProfiles()).map((p) => p.id);
-    for (const pid of profiles) for (const doc of await this.d.repo.listDocuments(pid)) await this.fillLabels(await this.fillFormDates(doc));
+    for (const pid of profiles) for (const doc of await this.d.repo.listDocuments(pid)) await this.fillLabels(await this.fillFormDates(await this.parsePendingLocally(doc)));
   }
 
   /**
@@ -504,7 +506,7 @@ export class HealthService {
     const at = this.now();
     for (const f of facts) {
       // A lab result was collected on the form's date, or on the date of a lab visit; a consultation's date says nothing about it.
-      const collected = form?.documentDate ?? (encounter?.kind === "lab" ? encounterDate : null);
+      const collected = (form?.encounter?.kind === "lab" ? form.documentDate : null) ?? (encounter?.kind === "lab" ? encounterDate : null);
       const eventDate = f.type === "lab_result" && collected ? ({ kind: "exact", date: collected } as const) : ({ kind: "unknown" } as const);
       const next = fillMissingDates(f, eventDate, date, at);
       if (next !== f) await this.d.repo.saveFact(next);
@@ -529,7 +531,7 @@ export class HealthService {
     for (const f of await this.d.repo.listFacts(doc.profileId)) {
       if (f.value.kind === "lab_result" && f.value.origin === "lab_report" && f.sources.some((s) => s.documentId === doc.id)) labNames.add(f.value.rawName);
     }
-    const next = applyLabels(doc, deriveLabels({ encounter, labNames: [...labNames], title: doc.title }));
+    const next = applyLabels(doc, deriveLabels({ encounter, labNames: [...labNames], title: doc.title }), proposal?.items.some((i) => i.draft.extraction.method === "parser") ?? false);
     if (next !== doc) await this.d.repo.saveDocument(next);
     return next;
   }
@@ -552,13 +554,25 @@ export class HealthService {
     return this.getDocument(profileId, documentId);
   }
 
+  /** A document that was waiting for the model is parsed locally once a parser for its layout exists. */
+  private async parsePendingLocally(doc: SourceDocument): Promise<SourceDocument> {
+    if (doc.sampleKey || !["extraction_ready", "extraction_unavailable"].includes(doc.status)) return doc;
+    if (await this.d.repo.getProposal(doc.profileId, doc.id)) return doc;
+    const local = await this.labFormProposal(doc, await this.d.repo.listVersions(doc.profileId, doc.id));
+    if (!local) return doc;
+    await this.d.repo.saveProposal(doc.profileId, local);
+    const parsed: SourceDocument = { ...doc, status: "review_pending", statusMessage: null };
+    await this.d.repo.saveDocument(parsed);
+    return parsed;
+  }
+
   /** Parses an already uploaded document with the local lab-form parser. */
   async parseLocally(profileId: string, documentId: string) {
     const doc = await this.d.repo.getDocument(profileId, documentId);
     if (!doc) throw new NotFoundError("Документ не найден");
     if (doc.sampleKey) throw new ValidationError("У примера уже есть подготовленный разбор.");
     const proposal = await this.labFormProposal(doc, await this.d.repo.listVersions(profileId, documentId));
-    if (!proposal) throw new ValidationError("Шаблон бланка не распознан: этот документ можно разобрать только с помощью модели.");
+    if (!proposal) throw new ValidationError("Шаблон документа не распознан: его можно разобрать только с помощью модели.");
     await this.d.repo.saveProposal(profileId, proposal);
     const updated: SourceDocument = { ...doc, status: "review_pending", statusMessage: null };
     await this.d.repo.saveDocument(updated);
@@ -581,6 +595,16 @@ export class HealthService {
   async extractWithModel(profileId: string, documentId: string, consent: boolean): Promise<SourceDocument> {
     const doc = await this.d.repo.getDocument(profileId, documentId);
     if (!doc) throw new NotFoundError("Документ не найден");
+    // A document the local parsers can read never goes to the model.
+    if (!doc.sampleKey) {
+      const local = await this.labFormProposal(doc, await this.d.repo.listVersions(profileId, documentId));
+      if (local) {
+        await this.d.repo.saveProposal(profileId, local);
+        const parsed: SourceDocument = { ...doc, status: doc.status === "applied" ? "applied" : "review_pending", statusMessage: null };
+        await this.d.repo.saveDocument(parsed);
+        return this.fillLabels(parsed);
+      }
+    }
     if (!this.d.live) throw new ValidationError("Модель не подключена: укажите ключ API в .env.local.");
     if (!consent) throw new ValidationError("Нужно согласие на отправку документа.");
     if (doc.sampleKey) throw new ValidationError("У примера уже есть подготовленный разбор; он не отправляется модели.");
