@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useMemo, useRef, useState, type FormEvent } from "react";
 import { ensureFileChosen, FilePicker } from "./file-picker";
 import type { SourceDocument } from "@/core/model";
+import { buildFolders, folderOf, type Folder, type FolderMode } from "@/core/rules/labels";
 import { api } from "./api";
 import { useProfile } from "./profile";
 import { Badge, Card, DemoBadge, DOC_KIND_LABEL, Empty, formatDateTime, formatIso, STATUS_LABEL } from "./common";
@@ -329,6 +330,17 @@ export function DocumentsView() {
     return true;
   });
   const sel = "mt-1 block w-full rounded border border-slate-300 px-2 py-1";
+  const [view, setView] = useState<"list" | "folders">("folders");
+  const [mode, setMode] = useState<FolderMode>("type");
+  const [folder, setFolder] = useState("");
+  const folders = useMemo(() => buildFolders(shown.map((r) => r.document), mode), [shown, mode]);
+  const inFolder = shown
+    .filter(({ document: d }) => {
+      if (!folder) return true;
+      const [top, sub] = folderOf(d, mode);
+      return folder === top || folder === `${top}/${sub}`;
+    })
+    .sort((a, b) => (b.document.documentDate ?? "").localeCompare(a.document.documentDate ?? ""));
 
   return (
     <div className="grid gap-4 lg:grid-cols-[1fr_380px]">
@@ -372,32 +384,16 @@ export function DocumentsView() {
             </select>
           </label>
         </fieldset>
+        <ViewSwitch view={view} onChange={setView} mode={mode} onMode={(m) => { setMode(m); setFolder(""); }} />
         {documents.length === 0 ? (
           <Empty>Документов пока нет. Откройте пример или загрузите файл.</Empty>
-        ) : shown.length === 0 ? (
-          <Empty>Под фильтры ничего не подходит.</Empty>
+        ) : view === "list" ? (
+          <DocumentList rows={shown} empty="Под фильтры ничего не подходит." />
         ) : (
-          <ul className="divide-y divide-slate-100">
-            {shown.map(({ document: d, factCount, unverifiedCount }) => (
-              <li key={d.id} className="py-2">
-                <Link href={`/documents/${d.id}`} className="font-medium text-teal-800 underline">
-                  {d.title}
-                </Link>
-                <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-slate-600">
-                  <span>{DOC_KIND_LABEL[d.kind]}</span>
-                  <span>Дата документа: {formatIso(d.documentDate)}</span>
-                  <span>Загружен: {formatDateTime(d.createdAt)}</span>
-                  {d.specialist && <span>{d.specialist}</span>}
-                  <Badge tone={STATUS_LABEL[d.status].tone}>{STATUS_LABEL[d.status].text}</Badge>
-                  {d.sampleKey && <DemoBadge>{d.isSynthetic ? "Синтетический" : "Подготовленный разбор"}</DemoBadge>}
-                  <span>
-                    Фактов: {factCount}
-                    {unverifiedCount ? `, не проверено вами: ${unverifiedCount}` : ""}
-                  </span>
-                </div>
-              </li>
-            ))}
-          </ul>
+          <div className="grid gap-3 sm:grid-cols-[minmax(0,220px)_minmax(0,1fr)]">
+            <FolderTree folders={folders} total={shown.length} selected={folder} onSelect={setFolder} />
+            <DocumentList rows={inFolder} empty={shown.length ? "В этой папке ничего нет." : "Под фильтры ничего не подходит."} />
+          </div>
         )}
       </Card>
       <div className="space-y-4">
@@ -407,3 +403,101 @@ export function DocumentsView() {
     </div>
   );
 }
+
+type Row = ReturnType<typeof useProfile>["documents"][number];
+
+function DocumentList({ rows, empty }: { rows: Row[]; empty: string }) {
+  if (!rows.length) return <Empty>{empty}</Empty>;
+  return (
+    <ul className="divide-y divide-slate-100">
+      {rows.map(({ document: d, factCount, unverifiedCount }) => (
+        <li key={d.id} className="py-2">
+          <Link href={`/documents/${d.id}`} className="font-medium text-teal-800 underline">
+            {d.title}
+          </Link>
+          <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+            <span>{DOC_KIND_LABEL[d.kind]}</span>
+            <span>Дата документа: {formatIso(d.documentDate)}</span>
+            <span>Загружен: {formatDateTime(d.createdAt)}</span>
+            {d.area && <span>{d.area}</span>}
+            {d.specialist && <span>{d.specialist}</span>}
+            {d.institution && <span>{d.institution}</span>}
+            <Badge tone={STATUS_LABEL[d.status].tone}>{STATUS_LABEL[d.status].text}</Badge>
+            {d.sampleKey && <DemoBadge>{d.isSynthetic ? "Синтетический" : "Подготовленный разбор"}</DemoBadge>}
+            <span>
+              Фактов: {factCount}
+              {unverifiedCount ? `, не проверено вами: ${unverifiedCount}` : ""}
+            </span>
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+const FOLDER_MODES: [FolderMode, string][] = [
+  ["type", "по типам и врачам"],
+  ["year", "по годам"],
+  ["clinic", "по клиникам"],
+];
+
+function ViewSwitch({ view, onChange, mode, onMode }: { view: "list" | "folders"; onChange: (v: "list" | "folders") => void; mode: FolderMode; onMode: (m: FolderMode) => void }) {
+  const btn = (active: boolean) => `rounded px-2 py-1 ${active ? "bg-teal-700 text-white" : "border border-slate-300 text-slate-700"}`;
+  return (
+    <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
+      <div role="group" aria-label="Вид" className="flex gap-1">
+        <button type="button" aria-pressed={view === "folders"} className={btn(view === "folders")} onClick={() => onChange("folders")}>
+          Папками
+        </button>
+        <button type="button" aria-pressed={view === "list"} className={btn(view === "list")} onClick={() => onChange("list")}>
+          Списком
+        </button>
+      </div>
+      {view === "folders" && (
+        <label className="flex items-center gap-1">
+          Раскладка
+          <select value={mode} onChange={(e) => onMode(e.target.value as FolderMode)} className="rounded border border-slate-300 px-2 py-1">
+            {FOLDER_MODES.map(([k, v]) => (
+              <option key={k} value={k}>
+                {v}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+    </div>
+  );
+}
+
+/** Virtual folders: documents are grouped by their labels, files on disk stay where they are. */
+function FolderTree({ folders, total, selected, onSelect }: { folders: Folder[]; total: number; selected: string; onSelect: (key: string) => void }) {
+  const item = (key: string, label: string, count: number, nested = false) => (
+    <li key={key}>
+      <button
+        type="button"
+        aria-current={selected === key ? "true" : undefined}
+        onClick={() => onSelect(key)}
+        className={`flex w-full items-baseline justify-between gap-2 rounded px-2 py-1 text-left ${nested ? "pl-5" : "font-medium"} ${selected === key ? "bg-teal-50 text-teal-900" : "hover:bg-slate-50"}`}
+      >
+        <span className="min-w-0 break-words">{label}</span>
+        <span className="text-xs tabular-nums text-slate-500">{count}</span>
+      </button>
+    </li>
+  );
+  return (
+    <nav aria-label="Папки" className="text-sm">
+      <ul>
+        {item("", "Все документы", total)}
+        {folders.map((f) => (
+          <li key={f.key}>
+            <ul>
+              {item(f.key, f.label, f.count)}
+              {f.children.map((c) => item(c.key, c.label, c.count, true))}
+            </ul>
+          </li>
+        ))}
+      </ul>
+    </nav>
+  );
+}
+

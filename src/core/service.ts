@@ -48,6 +48,7 @@ import { normalizeUnit, parseLabValue } from "./rules/lab-values";
 import { indicatorOf } from "./indicators";
 import { contentKey, normalizeIsoDate, proposalFromExtraction } from "./rules/extraction";
 import { parseLabForm } from "./rules/lab-form";
+import { applyLabels, deriveLabels } from "./rules/labels";
 
 export class NotFoundError extends Error {}
 export class ValidationError extends Error {}
@@ -481,7 +482,7 @@ export class HealthService {
   /** Fills missing dates of every lab form already in the profiles; runs at startup and after each upload. */
   async fillAllFormDates(profileId?: string) {
     const profiles = profileId ? [profileId] : (await this.d.repo.listProfiles()).map((p) => p.id);
-    for (const pid of profiles) for (const doc of await this.d.repo.listDocuments(pid)) await this.fillFormDates(doc);
+    for (const pid of profiles) for (const doc of await this.d.repo.listDocuments(pid)) await this.fillLabels(await this.fillFormDates(doc));
   }
 
   /**
@@ -514,6 +515,43 @@ export class HealthService {
     return updated;
   }
 
+  /**
+   * Fills the document's empty type, section, doctor and clinic from what parsing found
+   * (the stored proposal, the visit, the lab results). Nothing the user entered is replaced.
+   */
+  private async fillLabels(doc: SourceDocument): Promise<SourceDocument> {
+    if (doc.sampleKey || doc.labelsEditedAt) return doc;
+    if (doc.kind !== "other" && doc.area && (doc.specialist || doc.kind === "lab_report") && doc.institution) return doc;
+    const proposal = (await this.d.repo.getProposal(doc.profileId, doc.id)) ?? (await this.labFormProposal(doc, await this.d.repo.listVersions(doc.profileId, doc.id)));
+    const encounter = (await this.d.repo.listEncounters(doc.profileId)).find((e) => e.id === doc.encounterId) ?? proposal?.encounter ?? null;
+    const labNames = new Set<string>();
+    for (const i of proposal?.items ?? []) if (i.draft.value.kind === "lab_result" && i.draft.value.origin === "lab_report") labNames.add(i.draft.value.rawName);
+    for (const f of await this.d.repo.listFacts(doc.profileId)) {
+      if (f.value.kind === "lab_result" && f.value.origin === "lab_report" && f.sources.some((s) => s.documentId === doc.id)) labNames.add(f.value.rawName);
+    }
+    const next = applyLabels(doc, deriveLabels({ encounter, labNames: [...labNames], title: doc.title }));
+    if (next !== doc) await this.d.repo.saveDocument(next);
+    return next;
+  }
+
+  /** The user's own type, section, doctor and clinic; from now on they are not filled automatically. */
+  async setDocumentLabels(profileId: string, documentId: string, input: { kind?: string; area?: string | null; specialist?: string | null; institution?: string | null }) {
+    const doc = await this.d.repo.getDocument(profileId, documentId);
+    if (!doc) throw new NotFoundError("Документ не найден");
+    const KINDS: DocumentKind[] = ["lab_report", "consultation", "examination", "transcript", "note", "other"];
+    if (input.kind !== undefined && !KINDS.includes(input.kind as DocumentKind)) throw new ValidationError("Неизвестный тип документа");
+    const text = (v: string | null | undefined, old: string | null | undefined) => (v === undefined ? (old ?? null) : v?.trim().slice(0, 80) || null);
+    await this.d.repo.saveDocument({
+      ...doc,
+      kind: (input.kind as DocumentKind | undefined) ?? doc.kind,
+      area: text(input.area, doc.area),
+      specialist: text(input.specialist, doc.specialist),
+      institution: text(input.institution, doc.institution),
+      labelsEditedAt: this.now(),
+    });
+    return this.getDocument(profileId, documentId);
+  }
+
   /** Parses an already uploaded document with the local lab-form parser. */
   async parseLocally(profileId: string, documentId: string) {
     const doc = await this.d.repo.getDocument(profileId, documentId);
@@ -524,7 +562,7 @@ export class HealthService {
     await this.d.repo.saveProposal(profileId, proposal);
     const updated: SourceDocument = { ...doc, status: "review_pending", statusMessage: null };
     await this.d.repo.saveDocument(updated);
-    return updated;
+    return this.fillLabels(updated);
   }
 
   private readyMessage() {
@@ -558,7 +596,7 @@ export class HealthService {
     await this.d.repo.saveProposal(profileId, ex.proposal);
     const updated: SourceDocument = { ...doc, status: "review_pending", statusMessage: null };
     await this.d.repo.saveDocument(updated);
-    return updated;
+    return this.fillLabels(updated);
   }
 
   /**
@@ -674,7 +712,7 @@ export class HealthService {
     const title = proposal.encounter && doc.title === fileTitle ? proposal.encounter.title : doc.title;
     const updated: SourceDocument = { ...doc, kind, title, status: "applied", statusMessage: null, encounterId, documentDate: doc.documentDate ?? proposal.documentDate ?? null };
     await this.d.repo.saveDocument(updated);
-    await this.fillFormDates(updated);
+    await this.fillLabels(await this.fillFormDates(updated));
     return this.getDocument(profileId, documentId);
   }
 

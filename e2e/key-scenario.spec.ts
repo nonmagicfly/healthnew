@@ -255,3 +255,28 @@ test("another person's form is moved to a new family profile", async ({ page }) 
   await page.goto("/documents");
   await expect(page.getByRole("link", { name: /Комплексные|семья-2/ }).first()).toBeVisible();
 });
+
+test("documents are laid out in folders by type and section, and labels can be corrected", async ({ page }) => {
+  await useProfile(page, "me");
+  await page.goto("/documents");
+  const form = ["ПАПКИНФамилия: Дата: 08.03.2026", "Наименование исследования Результат Ед. изм. Нормальные значенияФлаг", "Ферритин мкг/л 6.0-60.041.0", "АЛТ Ед/л 0-4122"].join("\n");
+  await page.getByLabel(/Файл \(PDF/).setInputFiles([{ name: "папки.txt", mimeType: "text/plain", buffer: Buffer.from(form) }]);
+  await expect(page.getByRole("heading", { level: 1, name: /папки|Комплексные/ })).toBeVisible();
+  await page.goto("/documents");
+
+  const folders = page.getByRole("navigation", { name: "Папки" });
+  await folders.getByRole("button", { name: /^Биохимия/ }).click();
+  const doc = page.getByRole("link", { name: /Комплексные|папки/ }).first();
+  await expect(doc).toBeVisible();
+  await doc.click();
+
+  await expect(page.getByText(/Раздел: Биохимия/)).toBeVisible();
+  await page.getByRole("button", { name: "изменить" }).last().click();
+  await page.getByRole("textbox", { name: "Клиника" }).fill("Лаборатория Тест");
+  await page.getByRole("button", { name: "Сохранить" }).click();
+  await expect(page.getByText(/Клиника: Лаборатория Тест/)).toBeVisible();
+
+  await page.goto("/documents");
+  await page.getByLabel("Раскладка").selectOption("clinic");
+  await expect(folders.getByRole("button", { name: /^Лаборатория Тест/ })).toBeVisible();
+});

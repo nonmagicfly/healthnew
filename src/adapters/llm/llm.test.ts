@@ -50,7 +50,7 @@ const TRANSCRIPT = [
 
 const EXTRACTION: ExtractionOutput = {
   documentDate: null,
-  encounter: { kind: "visit", title: "Приём терапевта", date: { ...unknownDate, kind: "exact", date: "2025-03-01" }, specialist: "Терапевт" },
+  encounter: { kind: "visit", title: "Приём терапевта", date: { ...unknownDate, kind: "exact", date: "2025-03-01" }, specialist: "Терапевт", institution: null },
   items: [
     it0({ type: "lab_result", label: "Ферритин 250 нг/мл", quote: "Ферритин в прошлый раз был 250 нг/мл", lab: { name: "Ферритин", value: "250", unit: "нг/мл", reference: null, method: null, origin: "mention" } }),
     it0({ group: "state_change", type: "medication", label: "Омепразол", quote: "Я принимаю омепразол по утрам", medication: { name: "Омепразол", dose: null, status: "mentioned_taking" }, proposeCurrent: true }),

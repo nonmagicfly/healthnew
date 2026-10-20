@@ -73,7 +73,7 @@ export interface ExtractedItem {
 export interface ExtractionOutput {
   /** The date printed on the document itself (issue, visit or report date). */
   documentDate: ExtractedDate | null;
-  encounter: { kind: "visit" | "lab" | "examination"; title: string; date: ExtractedDate; specialist: string | null } | null;
+  encounter: { kind: "visit" | "lab" | "examination"; title: string; date: ExtractedDate; specialist: string | null; institution?: string | null } | null;
   items: ExtractedItem[];
 }
 
@@ -247,7 +247,7 @@ export function proposalFromExtraction(doc: SourceDocument, versions: ContentVer
   return {
     documentId: doc.id,
     documentDate: doc.documentDate ? null : printedDate,
-    encounter: enc && enc.title.trim() ? { key: `llm:${doc.id}:encounter`, kind: enc.kind, title: enc.title.trim(), date: toDateValue(enc.date), specialist: enc.specialist?.trim() || doc.specialist } : null,
+    encounter: enc && enc.title.trim() ? { key: `llm:${doc.id}:encounter`, kind: enc.kind, title: enc.title.trim(), date: toDateValue(enc.date), specialist: enc.specialist?.trim() || doc.specialist, institution: enc.institution?.trim() || null } : null,
     items,
   };
 }

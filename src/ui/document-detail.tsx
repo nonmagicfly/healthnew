@@ -395,10 +395,10 @@ export function DocumentDetailView() {
           <span>{DOC_KIND_LABEL[d.kind]}</span>
           <DocumentDate doc={d} onSaved={bump} />
           <span>Загружен: {formatDateTime(d.createdAt)}</span>
-          {d.specialist && <span>{d.specialist}</span>}
           <Badge tone={st.tone}>{st.text}</Badge>
           {d.isSynthetic && <DemoBadge>Синтетический документ</DemoBadge>}
         </div>
+        <DocumentLabels doc={d} onSaved={bump} />
         {search.get("duplicate") && (
           <p role="status" className="mt-2 rounded bg-sky-50 p-2 text-sm text-sky-900">
             Этот документ уже был загружен (тот же файл или копия с тем же текстом). Открыт существующий документ, дубль не создан.
@@ -548,6 +548,86 @@ function DocumentDate({ doc, onSaved }: { doc: SourceDocument; onSaved: () => vo
       <button type="submit" className="rounded bg-teal-700 px-2 py-0.5 text-white">Сохранить</button>
       <button type="button" className="underline" onClick={() => setEditing(false)}>Отмена</button>
       {error && <span role="alert" className="text-red-700">{error}</span>}
+    </form>
+  );
+}
+
+/** Type, section, doctor and clinic: filled from parsing when empty, editable by the user. */
+function DocumentLabels({ doc, onSaved }: { doc: SourceDocument; onSaved: () => void }) {
+  const { base } = useProfile();
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState({ kind: doc.kind as string, area: "", specialist: "", institution: "" });
+  const [error, setError] = useState<string | null>(null);
+  const parts = [
+    doc.area && `Раздел: ${doc.area}`,
+    doc.specialist && `Врач: ${doc.specialist}`,
+    doc.institution && `Клиника: ${doc.institution}`,
+  ].filter(Boolean);
+  if (!editing) {
+    return (
+      <p className="mt-1 text-sm text-slate-600">
+        {parts.length ? parts.join(" · ") : "Раздел, врач и клиника не указаны."}
+        {parts.length > 0 && !doc.labelsEditedAt && !doc.sampleKey && <span className="text-slate-500"> (определено автоматически)</span>}{" "}
+        {!doc.sampleKey && (
+          <button
+            type="button"
+            className="text-teal-800 underline"
+            onClick={() => {
+              setForm({ kind: doc.kind, area: doc.area ?? "", specialist: doc.specialist ?? "", institution: doc.institution ?? "" });
+              setEditing(true);
+            }}
+          >
+            изменить
+          </button>
+        )}
+      </p>
+    );
+  }
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    try {
+      await api(`${base}/documents/${doc.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ labels: form }) });
+      setEditing(false);
+      onSaved();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+  const input = "mt-1 block w-full rounded border border-slate-300 px-2 py-1";
+  return (
+    <form onSubmit={save} className="mt-2 grid gap-2 rounded border border-slate-200 p-2 text-sm sm:grid-cols-2">
+      <label>
+        Тип
+        <select value={form.kind} onChange={(e) => setForm({ ...form, kind: e.target.value })} className={input}>
+          {Object.entries(DOC_KIND_LABEL).map(([k, v]) => (
+            <option key={k} value={k}>
+              {v}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label>
+        Раздел
+        <input value={form.area} onChange={(e) => setForm({ ...form, area: e.target.value })} placeholder="Например, Биохимия или УЗИ" className={input} />
+      </label>
+      <label>
+        Врач
+        <input value={form.specialist} onChange={(e) => setForm({ ...form, specialist: e.target.value })} placeholder="Например, кардиолог" className={input} />
+      </label>
+      <label>
+        Клиника
+        <input value={form.institution} onChange={(e) => setForm({ ...form, institution: e.target.value })} className={input} />
+      </label>
+      <div className="flex items-center gap-2 sm:col-span-2">
+        <button type="submit" className="rounded bg-teal-700 px-2 py-0.5 text-white">
+          Сохранить
+        </button>
+        <button type="button" className="underline" onClick={() => setEditing(false)}>
+          Отмена
+        </button>
+        {error && <span role="alert" className="text-red-700">{error}</span>}
+      </div>
     </form>
   );
 }
