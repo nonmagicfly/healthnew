@@ -37,6 +37,7 @@ import {
   type FactCorrection,
 } from "./rules/facts";
 import { buildState, stateToText } from "./rules/state";
+import { buildDecisions } from "./rules/decisions";
 import { buildIndicatorView, findMatchingResult, listIndicators } from "./rules/series";
 import { buildTimeline, groupTimeline } from "./rules/timeline";
 import { retrieveFacts } from "./rules/retrieval";
@@ -771,6 +772,18 @@ export class HealthService {
   }
 
   // ---------- Derived views ----------
+
+  /** Everything waiting for the user's decision, across all documents. */
+  async decisions(profileId: string) {
+    const docs = await this.d.repo.listDocuments(profileId);
+    const withPatient = await Promise.all(
+      docs.map(async (document) => ({
+        document,
+        otherPatient: !!(await this.d.repo.getProposal(profileId, document.id))?.items.some((i) => i.key === `llm:${document.id}:patient`),
+      })),
+    );
+    return buildDecisions(await this.listFacts(profileId), withPatient, this.now().slice(0, 10));
+  }
 
   async state(profileId: string) {
     return buildState(await this.listFacts(profileId), this.now().slice(0, 10));

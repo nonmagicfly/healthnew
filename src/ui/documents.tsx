@@ -303,9 +303,9 @@ function BatchSummary({ rows }: { rows: BatchRow[] }) {
       </p>
       {decisions > 0 && (
         <p className="mt-1">
-          Ждут вашего решения: {decisions} (что принимаете сейчас, что актуально, вопросы). Они в разделе{" "}
-          <Link href="/" className="underline">
-            «Моё состояние»
+          Ждут вашего решения: {decisions} (что принимаете сейчас, что актуально, вопросы). Они собраны на странице{" "}
+          <Link href="/decisions" className="underline">
+            «Решения»
           </Link>
           .
         </p>

@@ -4,17 +4,21 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { ProfileProvider, useProfile } from "./profile";
+import { useApi } from "./api";
+import type { Decisions } from "@/core/rules/decisions";
 
 const NAV = [
   { href: "/", label: "Моё состояние" },
   { href: "/indicators", label: "Показатели" },
   { href: "/documents", label: "Документы" },
+  { href: "/decisions", label: "Решения" },
   { href: "/history", label: "История" },
   { href: "/chat", label: "Чат" },
 ];
 
 function Header() {
-  const { profiles, profile, setProfileId, liveModel } = useProfile();
+  const { profiles, profile, setProfileId, liveModel, base, version } = useProfile();
+  const pending = useApi<Decisions>(`${base}/decisions`, version).data?.total ?? 0;
   const path = usePathname();
   const active = (href: string) => (href === "/" ? path === "/" : path.startsWith(href));
   return (
@@ -32,6 +36,11 @@ function Header() {
               className={`rounded-md px-3 py-1.5 text-sm ${active(n.href) ? "bg-teal-700 text-white" : "text-slate-700 hover:bg-slate-100"}`}
             >
               {n.label}
+              {n.href === "/decisions" && pending > 0 && (
+                <span className="ml-1 rounded-full bg-amber-500 px-1.5 text-xs font-semibold text-white" aria-label={`ждут решения: ${pending}`}>
+                  {pending}
+                </span>
+              )}
             </Link>
           ))}
         </nav>

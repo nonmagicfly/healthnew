@@ -198,3 +198,20 @@ test("documents waiting for review are added to the history with one button", as
   await page.getByRole("button", { name: "Добавить все в историю" }).click();
   await expect(page.getByText(/Добавлено в историю: документов 1, новых фактов 1/)).toBeVisible();
 });
+
+test("decisions left by documents are made on one screen", async ({ page }) => {
+  await useProfile(page, "me");
+  await page.goto("/documents");
+  await page.getByRole("listitem").filter({ hasText: "Консультация терапевта" }).getByRole("button", { name: "Открыть пример" }).click();
+  await expect(page.getByRole("heading", { name: "Консультация терапевта" })).toBeVisible();
+  // The example may already be applied by an earlier scenario in the same data directory.
+  const apply = page.getByRole("button", { name: "Применить" });
+  if (await apply.isVisible()) await apply.click();
+  await expect(page.getByRole("heading", { name: /Извлечённые факты/ })).toBeVisible();
+
+  await page.getByRole("link", { name: /^Решения/ }).click();
+  await expect(page.getByRole("heading", { name: /Препараты из документов/ })).toBeVisible();
+  const omeprazole = page.getByRole("group", { name: /Действия: Омепразол/ });
+  await omeprazole.getByRole("button", { name: "Не принимаю" }).click();
+  await expect(omeprazole).toHaveCount(0);
+});

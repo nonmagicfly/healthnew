@@ -48,7 +48,7 @@ function AnswerForm({ onDone }: { onDone: (a: FactAction | null) => void }) {
   );
 }
 
-function Item({ item, fact, section, act }: { item: StateItem; fact: Fact | undefined; section: string; act: (id: string, a: FactAction) => Promise<void> }) {
+export function Item({ item, fact, section, act }: { item: StateItem; fact: Fact | undefined; section: string; act: (id: string, a: FactAction) => Promise<void> }) {
   const [mode, setMode] = useState<"none" | "correct" | "answer">("none");
   const run = (a: FactAction | null) => {
     setMode("none");
@@ -65,6 +65,8 @@ function Item({ item, fact, section, act }: { item: StateItem; fact: Fact | unde
     );
   if (section === "takingMedications") actions.push({ label: "Завершить приём", action: { type: "end", endDate: today() } });
   if (section === "conditions") actions.push({ label: "Завершить период", action: { type: "end", endDate: today() } });
+  if (section === "undecidedConditions") actions.push({ label: "Актуально сейчас", action: { type: "confirm_current" }, primary: true }, { label: "Не актуально", action: { type: "mark_historical" } });
+  if (section === "conflicts") actions.push({ label: "Это неверно", action: { type: "reject", reason: "Отклонено при разборе расхождения" } });
   if (section === "openQuestions") {
     if (fact?.value.kind === "clarification") actions.push({ label: "Ответить", mode: "answer", primary: true });
     if (fact?.value.kind === "appointment")
