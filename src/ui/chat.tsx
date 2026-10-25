@@ -22,7 +22,7 @@ const EXAMPLES = [
   "Есть ли у меня аллергии?",
 ];
 
-function Answer({ m }: { m: ChatMessage }) {
+export function Answer({ m }: { m: ChatMessage }) {
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2">
