@@ -1,7 +1,8 @@
 // Local parser for lab forms laid out as «Наименование исследования | Результат | Ед. изм. |
-// Нормальные значения | Флаг». The text layer of such PDFs glues the columns together
-// ("Гемоглобин г/л 132-173155"), so the reference and the result are split by rule:
-// the upper bound has as many decimals as the lower one and is not below it.
+// Нормальные значения | Флаг». Two text layers of this form are known:
+// - columns glued, result last ("Гемоглобин г/л 132-173155"): the reference and the result are split
+//   by rule, the upper bound has as many decimals as the lower one and is not below it;
+// - columns separated by spaces, result first ("Гемоглобин 155 г/л 132-173", "АЛТ 21.5 Ед/л < 41.0").
 // Runs entirely on this computer; nothing is sent anywhere.
 import type { ExtractedDate, ExtractedItem, ExtractionOutput } from "./extraction";
 import { normalizeIsoDate } from "./extraction";
@@ -12,12 +13,14 @@ export interface LabFormResult extends ExtractionOutput {
 }
 
 const HEADER = /Наименование исследования\s*Результат\s*Ед\.\s*изм\.\s*Нормальные значения/;
-const UNIT = String.raw`(?:10\*\d+\/[а-яa-z]+|%|[А-Яа-яЁёA-Za-zμµ]+\/[А-Яа-яЁёA-Za-z]+|фл|пг|г\/л)`;
+const UNIT = String.raw`(?:10[*^]\d+\/[а-яa-z]+|%|[А-Яа-яЁёA-Za-zμµ]+\/[А-Яа-яЁёA-Za-z]+|фл|пг|г\/л)`;
 const NUM = String.raw`\d+(?:[.,]\d+)?`;
 const RESULT_LINE = new RegExp(String.raw`^(.+?)\s+(${UNIT})\s*(.*)$`);
 /** A unit at the start of a line: the name took the lines above it. */
 const UNIT_LINE = new RegExp(String.raw`^(${UNIT})\s*(.*)$`);
 const VALUE = new RegExp(String.raw`^(?:[<>≤≥]\s*)?${NUM}$`);
+/** Result-first row: name, result, unit, then a range, a bound, or nothing (a long text reference on the lines below). */
+const RESULT_FIRST = new RegExp(String.raw`^(.+?)\s+(${NUM})\s+(${UNIT})(?:\s+(${NUM}\s*-\s*${NUM}|[<>≤≥]\s*${NUM}))?$`);
 
 const decimals = (s: string) => (s.includes(".") || s.includes(",") ? s.split(/[.,]/)[1].length : 0);
 const num = (s: string) => Number(s.replace(",", "."));
@@ -85,7 +88,17 @@ export function parseLabForm(pages: string[]): LabFormResult | null {
   const first = pages[0];
   const title = first.split("\n")[0].trim() || "Анализ";
   const date = dateOf(first, /Дата:\s*(\d{2}\.\d{2}\.\d{4})/);
-  const name = ["Фамилия", "Имя", "Отчество"].map((k) => first.match(new RegExp(String.raw`^\s*([А-ЯЁA-Z][^\n]*?)${k}:`, "m"))?.[1].trim()).filter(Boolean);
+  // A name part is one word printed right before its label («ИВАНОВФамилия:») or right after it («Фамилия: ИВАНОВ»).
+  // Anything else (other header fields caught by the column order) is not a name: better no name than a wrong one.
+  const NAME = String.raw`(?:[А-ЯЁ][а-яё]+(?:-[А-ЯЁ][а-яё]+)*|[А-ЯЁ]{2,}(?:-[А-ЯЁ]{2,})*)`;
+  const word = new RegExp(String.raw`^${NAME}$`);
+  const namePart = (k: string) => {
+    const before = first.match(new RegExp(String.raw`^\s*(\S+?)${k}:`, "m"))?.[1];
+    if (before && word.test(before)) return before;
+    return first.match(new RegExp(String.raw`${k}:[ \t]*(${NAME})`))?.[1] ?? null;
+  };
+  const surname = namePart("Фамилия");
+  const name = surname ? [surname, namePart("Имя"), namePart("Отчество")].filter(Boolean) : [];
 
   const items: ExtractedItem[] = [];
   const seen = new Set<string>();
@@ -94,11 +107,14 @@ export function parseLabForm(pages: string[]): LabFormResult | null {
     const start = p === 0 ? lines.findIndex((l) => HEADER.test(l)) + 1 : 0;
     for (let i = start; i < lines.length; i++) {
       const line = lines[i];
-      if (/^Исследование\s*-/.test(line)) continue;
-      const unitFirst = line.match(UNIT_LINE);
-      const m = unitFirst ? ["", "", unitFirst[1], unitFirst[2]] : line.match(RESULT_LINE);
+      if (/^Исследование\s*-/.test(line) || /биоматериал\s*-/.test(line)) continue;
+      const first = line.match(RESULT_FIRST);
+      const unitFirst = first ? null : line.match(UNIT_LINE);
+      const m = first ? ["", first[1], first[3], ""] : unitFirst ? ["", "", unitFirst[1], unitFirst[2]] : line.match(RESULT_LINE);
       if (!m) continue;
-      const parsed = splitReferenceAndValue(m[3]);
+      const parsed = first
+        ? { value: first[2], reference: first[4]?.replace(/\s+/g, "") ?? null, flag: null }
+        : splitReferenceAndValue(m[3]);
       if (!parsed) continue;
       // A wrapped name continues with lowercase words; with the unit on its own line the whole name is above.
       const parts = [m[1]].filter(Boolean);
@@ -106,7 +122,7 @@ export function parseLabForm(pages: string[]): LabFormResult | null {
       let needMore = unitFirst !== null || /^[а-яё]/.test(line);
       while (needMore && j >= start) {
         const prev = lines[j];
-        if (RESULT_LINE.test(prev) && splitReferenceAndValue(prev.match(RESULT_LINE)![3])) break;
+        if (RESULT_FIRST.test(prev) || (RESULT_LINE.test(prev) && splitReferenceAndValue(prev.match(RESULT_LINE)![3]))) break;
         parts.unshift(prev);
         needMore = /^[а-яё]/.test(prev);
         j--;
