@@ -5,10 +5,10 @@ import { PreparedExtractor } from "./extraction/prepared";
 import { BuiltInSamples } from "./samples/catalog";
 import { FIXTURE_SAMPLES } from "./samples/fixtures";
 import { DemoLlm } from "./llm/demo";
-import type { LiveModel, Repository } from "@/core/ports";
+import type { LiveModel, Repository, SpeechTranscriber } from "@/core/ports";
 
 /** Service wired with in-memory storage, a fixed clock and invented examples instead of personal ones, for tests. */
-export async function createTestService(opts: { repo?: Repository; now?: string; live?: LiveModel | null } = {}) {
+export async function createTestService(opts: { repo?: Repository; now?: string; live?: LiveModel | null; transcriber?: SpeechTranscriber | null } = {}) {
   let n = 0;
   const repo = opts.repo ?? new MemoryRepository();
   const samples = new BuiltInSamples(FIXTURE_SAMPLES);
@@ -20,6 +20,7 @@ export async function createTestService(opts: { repo?: Repository; now?: string;
     llm: new DemoLlm(),
     live: opts.live ?? null,
     samples,
+    transcriber: opts.transcriber ?? null,
     clock: { now: () => new Date(opts.now ?? "2026-10-18T10:00:00Z") },
     ids: { next: (p) => `${p}_${++n}` },
   });

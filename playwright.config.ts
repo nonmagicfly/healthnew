@@ -19,6 +19,6 @@ export default defineConfig({
     url: `http://localhost:${PORT}`,
     timeout: 240_000,
     reuseExistingServer: false,
-    env: { HEALTH_DATA_DIR: ".e2e-data", HEALTH_SAMPLES: "fixtures", HEALTH_LLM_PROVIDER: "none" },
+    env: { HEALTH_DATA_DIR: ".e2e-data", HEALTH_SAMPLES: "fixtures", HEALTH_LLM_PROVIDER: "none", HEALTH_TRANSCRIBE: "none" },
   },
 });

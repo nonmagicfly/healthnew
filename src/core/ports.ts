@@ -58,6 +58,22 @@ export interface DocumentRecognizer {
   recognize(input: RecognitionInput): Promise<RecognitionResult>;
 }
 
+export interface SpokenSegment {
+  /** Seconds from the start of the recording. */
+  start: number;
+  end: number | null;
+  text: string;
+}
+
+export type TranscriptionResult =
+  | { ok: true; segments: SpokenSegment[]; /** When the recording was made, if the file says so. */ recordedAt: string | null; model: string }
+  | { ok: false; message: string };
+
+/** Turns a recorded conversation into text on this computer. Nothing is sent to external services. */
+export interface SpeechTranscriber {
+  transcribe(bytes: Uint8Array, mime: string): Promise<TranscriptionResult>;
+}
+
 export type ExtractionResult =
   | { ok: true; proposal: Proposal; method: "prepared" | "parser" | "llm" }
   | { ok: false; reason: "not_connected" | "failed"; message: string };

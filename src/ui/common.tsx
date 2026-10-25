@@ -102,6 +102,7 @@ export const DOC_KIND_LABEL: Record<string, string> = {
 
 export const STATUS_LABEL: Record<string, { text: string; tone: "slate" | "green" | "amber" | "red" | "blue" }> = {
   stored: { text: "Сохранён", tone: "slate" },
+  transcribing: { text: "Расшифровывается…", tone: "blue" },
   recognized: { text: "Текст распознан", tone: "blue" },
   recognition_unavailable: { text: "Распознавание недоступно", tone: "amber" },
   extraction_unavailable: { text: "Извлечение не подключено", tone: "amber" },

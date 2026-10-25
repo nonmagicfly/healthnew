@@ -13,6 +13,7 @@ import type {
   ProposalDecision,
   SourceDocument,
   SourceRef,
+  TranscriptSegment,
 } from "./model";
 import type {
   Clock,
@@ -24,6 +25,7 @@ import type {
   LlmAdapter,
   Repository,
   SampleCatalog,
+  SpeechTranscriber,
 } from "./ports";
 import {
   addSource,
@@ -66,6 +68,8 @@ export interface Deps {
   /** Connected language model; null when no API key is configured (demo mode only). */
   live?: LiveModel | null;
   samples: SampleCatalog;
+  /** Local speech-to-text for recorded conversations; without it audio is stored but not transcribed. */
+  transcriber?: SpeechTranscriber | null;
   clock: Clock;
   ids: IdGenerator;
 }
@@ -75,8 +79,22 @@ export const DEFAULT_PROFILES: Profile[] = [
   { id: "demo", name: "Демо-профиль", isDemo: true },
 ];
 
-const ALLOWED_MIME = new Set(["application/pdf", "text/plain", "text/markdown"]);
+const AUDIO: Record<string, string> = { ".m4a": "audio/mp4", ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg", ".opus": "audio/ogg", ".webm": "audio/webm", ".aac": "audio/aac" };
+const ALLOWED_MIME = new Set(["application/pdf", "text/plain", "text/markdown", ...Object.values(AUDIO)]);
 const MAX_SIZE = 25 * 1024 * 1024;
+/** An hour-long recording of a visit fits. */
+const MAX_AUDIO_SIZE = 300 * 1024 * 1024;
+
+export const isAudio = (mime: string) => mime.startsWith("audio/");
+
+/** Seconds as «m:ss» or «h:mm:ss». */
+export function timecodeOf(seconds: number): string {
+  const t = Math.max(0, Math.floor(seconds));
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const ss = String(t % 60).padStart(2, "0");
+  return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
+}
 
 /** Text of a document with whitespace collapsed, for spotting the same document saved as another file. */
 function sameText(pages: string[]): string {
@@ -93,6 +111,8 @@ export function mimeFor(fileName: string, declared: string): string {
   if (lower.endsWith(".pdf")) return "application/pdf";
   if (lower.endsWith(".txt")) return "text/plain";
   if (lower.endsWith(".md")) return "text/markdown";
+  const audio = AUDIO[lower.slice(lower.lastIndexOf("."))];
+  if (audio) return audio;
   return declared || "application/octet-stream";
 }
 
@@ -271,14 +291,14 @@ export class HealthService {
     await this.profile(profileId);
     const mime = mimeFor(input.fileName, input.mime);
     if (!input.bytes.length) throw new ValidationError("Файл пустой");
-    if (input.bytes.length > MAX_SIZE) throw new ValidationError("Файл больше 25 МБ");
-    if (!ALLOWED_MIME.has(mime)) throw new ValidationError("Поддерживаются только PDF и текстовые файлы (.txt, .md)");
+    if (!ALLOWED_MIME.has(mime)) throw new ValidationError("Поддерживаются PDF, текстовые файлы (.txt, .md) и записи разговора (.m4a, .mp3, .wav, .ogg, .webm)");
+    if (isAudio(mime) ? input.bytes.length > MAX_AUDIO_SIZE : input.bytes.length > MAX_SIZE) throw new ValidationError(isAudio(mime) ? "Запись больше 300 МБ" : "Файл больше 25 МБ");
 
     const sha256 = await sha256Hex(input.bytes);
     const existing = (await this.d.repo.listDocuments(profileId)).find((d) => d.original?.sha256 === sha256);
     if (existing) return { document: await this.fillFormDates(existing), duplicate: true };
 
-    const kind = input.kind ?? (mime === "application/pdf" ? "other" : "transcript");
+    const kind = isAudio(mime) ? "transcript" : (input.kind ?? (mime === "application/pdf" ? "other" : "transcript"));
     const doc: SourceDocument = {
       id: this.d.ids.next("doc"),
       profileId,
@@ -296,6 +316,16 @@ export class HealthService {
       statusMessage: null,
       createdAt: this.now(),
     };
+    if (isAudio(mime)) {
+      // A recording is turned into text in the background: an hour of speech takes a while on a laptop.
+      const stored: SourceDocument = this.d.transcriber
+        ? { ...doc, status: "transcribing", statusMessage: "Запись расшифровывается на этом компьютере." }
+        : { ...doc, status: "recognition_unavailable", statusMessage: "Расшифровка записей не подключена. Запись сохранена." };
+      await this.d.files.put(sha256, input.bytes);
+      await this.d.repo.saveDocument(stored);
+      if (this.d.transcriber) this.startTranscription(stored, input.bytes);
+      return { document: stored, duplicate: false };
+    }
     // The same document saved again as another file (a re-download, a copy) has the same text: it is not stored twice.
     const rec = await this.d.recognizer.recognize({ document: doc, bytes: input.bytes });
     const text = rec.ok ? sameText(rec.version.pages) : "";
@@ -384,6 +414,77 @@ export class HealthService {
     return this.getDocument(profileId, documentId);
   }
 
+  private transcriptions = new Map<string, Promise<void>>();
+
+  private startTranscription(doc: SourceDocument, bytes: Uint8Array) {
+    if (this.transcriptions.has(doc.id)) return;
+    const run = this.transcribe(doc, bytes).finally(() => this.transcriptions.delete(doc.id));
+    this.transcriptions.set(doc.id, run);
+  }
+
+  /** Resolves once every transcription in progress has finished (used by tests). */
+  async transcriptionsIdle() {
+    while (this.transcriptions.size) await Promise.all([...this.transcriptions.values()]);
+  }
+
+  private async transcribe(doc: SourceDocument, bytes: Uint8Array) {
+    const fail = async (message: string) => {
+      const current = (await this.d.repo.getDocument(doc.profileId, doc.id)) ?? doc;
+      await this.d.repo.saveDocument({ ...current, status: "recognition_unavailable", statusMessage: message });
+    };
+    let result: Awaited<ReturnType<SpeechTranscriber["transcribe"]>>;
+    try {
+      result = await this.d.transcriber!.transcribe(bytes, doc.original!.mime);
+    } catch {
+      // Generic on purpose: no words of the recording in logs or errors.
+      return fail("Не удалось расшифровать запись. Оригинал сохранён.");
+    }
+    if (!result.ok) return fail(result.message);
+    const segments: TranscriptSegment[] = result.segments
+      .map((s) => ({ ...s, text: s.text.trim() }))
+      .filter((s) => s.text)
+      // Speech-to-text does not tell the doctor from the patient: every line is marked as unclear.
+      .map((s, i) => ({ id: `s${i + 1}`, speaker: "unclear", speakerLabel: null, timecode: timecodeOf(s.start), text: s.text }));
+    if (!segments.length) return fail("В записи не найдено речи. Оригинал сохранён.");
+    const current = (await this.d.repo.getDocument(doc.profileId, doc.id)) ?? doc;
+    const recordedAt = normalizeIsoDate(result.recordedAt?.slice(0, 10));
+    const ready: SourceDocument = { ...current, documentDate: current.documentDate ?? recordedAt ?? null, status: "recognized", statusMessage: null };
+    await this.d.repo.saveDocument(ready);
+    await this.saveVersion(ready, {
+      method: "speech_to_text",
+      pages: [segments.map((s) => `[${s.timecode}] ${s.text}`).join("\n")],
+      segments,
+      note: `Расшифровано на этом компьютере (${result.model}); говорящие не размечены`,
+    });
+    await this.process(ready, null);
+  }
+
+  /** Starts the transcription of a recording again; a text already made from it is kept until the new one is ready. */
+  async retranscribe(profileId: string, documentId: string) {
+    if (!this.d.transcriber) throw new ValidationError("Расшифровка записей не подключена");
+    const doc = await this.d.repo.getDocument(profileId, documentId);
+    if (!doc) throw new NotFoundError("Документ не найден");
+    if (!doc.original || !isAudio(doc.original.mime)) throw new ValidationError("Это не запись разговора");
+    if (doc.status !== "recognition_unavailable" && doc.status !== "error") throw new ValidationError("Запись уже расшифрована или расшифровывается");
+    const bytes = await this.d.files.get(doc.original.sha256);
+    if (!bytes) throw new NotFoundError("Файл оригинала отсутствует в хранилище");
+    const started: SourceDocument = { ...doc, status: "transcribing", statusMessage: "Запись расшифровывается на этом компьютере." };
+    await this.d.repo.saveDocument(started);
+    this.startTranscription(started, bytes);
+    return started;
+  }
+
+  /** Recordings whose transcription was cut short by a restart start again. */
+  async resumeTranscriptions() {
+    if (!this.d.transcriber) return;
+    for (const p of await this.d.repo.listProfiles())
+      for (const doc of await this.d.repo.listDocuments(p.id)) {
+        if (doc.status !== "transcribing" || !doc.original) continue;
+        const bytes = await this.d.files.get(doc.original.sha256);
+        if (bytes) this.startTranscription(doc, bytes);
+      }
+  }
+
   private async saveVersion(doc: SourceDocument, v: Omit<ContentVersion, "id" | "profileId" | "documentId" | "createdAt">) {
     await this.d.repo.saveVersion({ ...v, id: this.d.ids.next("ver"), profileId: doc.profileId, documentId: doc.id, createdAt: this.now() });
   }
@@ -438,7 +539,7 @@ export class HealthService {
 
   /** Proposal from the local lab-form parser, or null when the layout is not recognized. */
   private async labFormProposal(doc: SourceDocument, versions: ContentVersion[]): Promise<Proposal | null> {
-    const text = versions.find((v) => v.method === "pdf_text_layer" || v.method === "plain_text" || v.method === "transcript_parser");
+    const text = versions.find((v) => v.method === "pdf_text_layer" || v.method === "plain_text" || v.method === "transcript_parser" || v.method === "speech_to_text");
     // A lab form or a consultation of a known layout; anything else is left for the model.
     const parsed = text ? (parseLabForm(text.pages) ?? parseConsultation(text.pages)) : null;
     if (!parsed) return null;
