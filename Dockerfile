@@ -11,7 +11,8 @@ RUN npm ci
 COPY . .
 RUN mkdir -p public && NEXT_OUTPUT=standalone npm run build
 # The speech-to-text runtime is loaded at run time, so the build does not trace it: copy it with only this machine's binaries.
-RUN mkdir -p /ort && cp -r node_modules/onnxruntime-node /ort/ \
+# onnxruntime-common is copied whole too: the trace keeps only its ESM build, onnxruntime-node needs the CommonJS one.
+RUN mkdir -p /ort && cp -r node_modules/onnxruntime-node node_modules/onnxruntime-common /ort/ \
     && arch=$(node -p process.arch) \
     && find /ort/onnxruntime-node/bin/napi-v6 -mindepth 2 -maxdepth 2 ! -path "*/linux/$arch" -exec rm -rf {} + \
     && rm -f /ort/onnxruntime-node/bin/napi-v6/linux/*/libonnxruntime_providers_cuda.so /ort/onnxruntime-node/bin/napi-v6/linux/*/libonnxruntime_providers_tensorrt.so
@@ -29,6 +30,7 @@ COPY --from=build /app/.next/standalone ./
 COPY --from=build /app/.next/static ./.next/static
 COPY --from=build /app/public ./public
 COPY --from=build /ort/onnxruntime-node ./node_modules/onnxruntime-node
+COPY --from=build /ort/onnxruntime-common ./node_modules/onnxruntime-common
 RUN mkdir -p /data && chown node:node /data
 USER node
 VOLUME /data
