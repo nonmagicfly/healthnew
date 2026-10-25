@@ -33,6 +33,8 @@ export type DocumentKind =
 
 export type ProcessingStatus =
   | "stored"
+  /** A recorded conversation is being turned into text on this computer. */
+  | "transcribing"
   | "recognized"
   | "recognition_unavailable"
   | "extraction_unavailable"
@@ -83,7 +85,7 @@ export interface TranscriptSegment {
   text: string;
 }
 
-export type ContentMethod = "pdf_text_layer" | "plain_text" | "transcript_parser" | "prepared";
+export type ContentMethod = "pdf_text_layer" | "plain_text" | "transcript_parser" | "speech_to_text" | "prepared";
 
 export interface ContentVersion {
   id: string;

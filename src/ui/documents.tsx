@@ -291,11 +291,11 @@ function Upload() {
       <form onSubmit={submit} className="grid gap-2 text-sm sm:grid-cols-2">
         <div className="sm:col-span-2">
           <div className="mb-1">
-            Файлы (PDF или текст расшифровки .txt), можно выбрать несколько
+            Файлы (PDF, текст расшифровки .txt или запись разговора), можно выбрать несколько
           </div>
           <FilePicker
-            label="Файл (PDF или текст расшифровки .txt)"
-            accept=".pdf,.txt,.md,application/pdf,text/plain"
+            label="Файл (PDF, текст расшифровки .txt или запись разговора)"
+            accept=".pdf,.txt,.md,.m4a,.mp3,.wav,.ogg,.opus,.webm,.aac,application/pdf,text/plain,audio/*"
             inputRef={fileRef}
             autoSubmit
             multiple

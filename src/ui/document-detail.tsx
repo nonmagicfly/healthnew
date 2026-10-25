@@ -27,6 +27,7 @@ const METHOD_LABEL: Record<ContentVersion["method"], { text: string; demo: boole
   pdf_text_layer: { text: "Текстовый слой PDF (извлечён локально)", demo: false },
   plain_text: { text: "Текст файла", demo: false },
   transcript_parser: { text: "Расшифровка, разобранная по репликам", demo: false },
+  speech_to_text: { text: "Расшифровка записи", demo: false },
   prepared: { text: "Подготовленное описание (не текст оригинала)", demo: true },
 };
 
@@ -65,7 +66,7 @@ function SourcePane({ detail, focusFact, focusSegment }: { detail: Detail; focus
   const tabs = [...(d.original ? [{ id: "original", label: "Оригинал" }] : []), ...detail.versions.map((v) => ({ id: v.id, label: METHOD_LABEL[v.method].text }))];
   const preferred = focusFact?.sources.find((s) => s.documentId === d.id)?.versionId ?? null;
   const [chosen, setTab] = useState<string | null>(null);
-  const parsed = detail.versions.find((v) => v.method === "transcript_parser")?.id;
+  const parsed = detail.versions.find((v) => v.method === "transcript_parser" || v.method === "speech_to_text")?.id;
   const tab = chosen ?? preferred ?? parsed ?? tabs[0]?.id ?? "";
   const quote = focusFact?.sources.find((s) => s.documentId === d.id)?.quote ?? null;
   const [attachError, setAttachError] = useState<string | null>(null);
@@ -116,7 +117,9 @@ function SourcePane({ detail, focusFact, focusSegment }: { detail: Detail; focus
         </div>
       )}
       {tab === "original" && d.original && (
-        d.original.mime === "application/pdf" ? (
+        d.original.mime.startsWith("audio/") ? (
+          <audio controls preload="metadata" src={`${base}/documents/${d.id}/original`} className="w-full" aria-label={`Запись: ${d.title}`} />
+        ) : d.original.mime === "application/pdf" ? (
           <iframe title={`Оригинал: ${d.title}`} src={`${base}/documents/${d.id}/original`} className="h-[70vh] w-full rounded border border-slate-200" />
         ) : (
           <OriginalText url={`${base}/documents/${d.id}/original`} quote={quote} />
@@ -125,6 +128,7 @@ function SourcePane({ detail, focusFact, focusSegment }: { detail: Detail; focus
       {version && (
         <div>
           {METHOD_LABEL[version.method].demo && <p className="mb-2"><DemoBadge>{version.note ?? "Подготовленное описание"}</DemoBadge></p>}
+          {version.method === "speech_to_text" && version.note && <p className="mb-2 text-xs text-slate-500">{version.note}</p>}
           {version.segments.length > 0 ? (
             <ol className="space-y-1 text-sm">
               {version.segments.map((s) => {
@@ -373,6 +377,15 @@ export function DocumentDetailView() {
   const focusId = search.get("fact");
   const focusSegment = search.get("segment");
 
+  // A recording is transcribed in the background: the page checks back until the text is ready.
+  const transcribing = detail.data?.document.status === "transcribing";
+  const { reload } = detail;
+  useEffect(() => {
+    if (!transcribing) return;
+    const t = setInterval(reload, 4000);
+    return () => clearInterval(t);
+  }, [transcribing, reload]);
+
   useEffect(() => {
     if (!detail.data || !focusId) return;
     document.getElementById(`fact-${focusId}`)?.scrollIntoView({ block: "center" });
@@ -421,6 +434,7 @@ export function DocumentDetailView() {
         <SourcePane key={focusId ?? "none"} detail={detail.data} focusFact={focusFact} focusSegment={focusSegment} />
         <div className="space-y-4">
           {d.status === "review_pending" && detail.data.proposal && <ProposalCard detail={detail.data} onApplied={bump} />}
+          {isRecording(d) && (d.status === "recognition_unavailable" || d.status === "error") && <Retranscribe doc={d} onDone={bump} />}
           {canParseLocally(d) && <LocalParse doc={d} onDone={bump} />}
           {/* A document read by the local parsers is never sent to the model. */}
           {canSendToModel(d) && !detail.data.facts.some((f) => f.extraction.method === "parser") && <ModelExtract doc={d} onDone={bump} />}
@@ -465,8 +479,42 @@ export function DocumentDetailView() {
 
 const SENDABLE: SourceDocument["status"][] = ["extraction_ready", "extraction_unavailable", "recognition_unavailable", "error", "applied"];
 
+const isRecording = (d: SourceDocument) => !!d.original?.mime.startsWith("audio/");
+
 function canSendToModel(d: SourceDocument) {
+  // A recording itself is never sent anywhere; only its text, once it is transcribed.
+  if (isRecording(d) && (d.status === "recognition_unavailable" || d.status === "error")) return false;
   return !d.sampleKey && SENDABLE.includes(d.status);
+}
+
+/** Starts the local transcription again, e.g. after the model could not be downloaded. */
+function Retranscribe({ doc, onDone }: { doc: SourceDocument; onDone: () => void }) {
+  const { base } = useProfile();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const run = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await postJson(`${base}/documents/${doc.id}/transcribe`, {});
+      onDone();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Card title="Расшифровка записи">
+      <p className="text-sm text-slate-700">Запись расшифровывается на этом компьютере и никуда не отправляется. Модель скачивается один раз при первой расшифровке.</p>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <button type="button" onClick={run} disabled={busy} className="rounded bg-teal-700 px-3 py-1 text-sm text-white disabled:opacity-50">
+          {busy ? "Запускаю…" : "Расшифровать снова"}
+        </button>
+        {error && <span role="alert" className="text-sm text-red-700">{error}</span>}
+      </div>
+    </Card>
+  );
 }
 
 /** Sends one document to the connected model, only after the user ticks the consent box. */

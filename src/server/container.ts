@@ -10,6 +10,7 @@ import { DemoLlm } from "@/adapters/llm/demo";
 import { ClaudeModel } from "@/adapters/llm/claude";
 import { OpenAiModel } from "@/adapters/llm/openai";
 import { liveModel } from "@/adapters/llm/live";
+import { WhisperTranscriber } from "@/adapters/transcribe/whisper";
 import type { LiveModel } from "@/core/ports";
 
 // HEALTH_SAMPLES=fixtures swaps personal examples for invented ones (used by e2e tests).
@@ -45,12 +46,15 @@ export function getService(): Promise<HealthService> {
       llm: new DemoLlm(),
       live: liveFromEnv(),
       samples,
+      // HEALTH_TRANSCRIBE=none turns local speech-to-text off (recordings are then only stored).
+      transcriber: process.env.HEALTH_TRANSCRIBE === "none" ? null : new WhisperTranscriber(dir),
       clock: { now: () => new Date() },
       ids: { next: (p) => `${p}_${crypto.randomUUID().slice(0, 12)}` },
     });
     await service.ensureProfiles();
     // Lab forms extracted before their printed date was read get it now; only empty dates are filled.
     await service.fillAllFormDates().catch(() => undefined);
+    await service.resumeTranscriptions().catch(() => undefined);
     return service;
   })();
   return g.__health;
