@@ -682,7 +682,7 @@ export class HealthService {
   }
 
   private readyMessage() {
-    return `Факты можно извлечь с помощью ${this.d.live!.provider} (${this.d.live!.model}). Документ будет отправлен только после вашего согласия.`;
+    return `Факты можно извлечь с помощью ${this.d.live!.provider} (${this.d.live!.model}). Документ отправляется по кнопке «Отправить и извлечь факты».`;
   }
 
   /** The connected model, if any. */

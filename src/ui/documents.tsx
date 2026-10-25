@@ -157,7 +157,6 @@ function Upload() {
     info: string | null;
   }>({ busy: false, error: null, info: null });
   const [batch, setBatch] = useState<BatchRow[]>([]);
-  const [agreed, setAgreed] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const setRow = (i: number, patch: Partial<BatchRow>) =>
     setBatch((rows) => rows.map((r, j) => (j === i ? { ...r, ...patch } : r)));
@@ -213,7 +212,6 @@ function Upload() {
       return;
     }
     // Several files: uploaded one after another, each gets its own line with the result.
-    setAgreed(false);
     setBatch(
       files.map((f) => ({
         name: f.name,
@@ -281,7 +279,6 @@ function Upload() {
         setRow(i, { status: "extract_error", message: (err as Error).message });
       }
     }
-    setAgreed(false);
     bump();
     setState({ busy: false, error: null, info: null });
   };
@@ -427,23 +424,13 @@ function Upload() {
                 факты сразу добавятся в историю с пометкой «не проверено»; что
                 вы принимаете сейчас и что актуально, решаете вы.
               </p>
-              <label className="mt-2 flex items-start gap-2">
-                <input
-                  type="checkbox"
-                  checked={agreed}
-                  onChange={(e) => setAgreed(e.target.checked)}
-                  className="mt-1"
-                />
-                <span>
-                  Согласен отправить в {liveModel.provider} эти документы (
-                  {sendable.length}):{" "}
-                  {sendable.map(({ r }) => r.name).join(", ")}
-                </span>
-              </label>
+              <p className="mt-1">
+                Документы ({sendable.length}):{" "}
+                {sendable.map(({ r }) => r.name).join(", ")}
+              </p>
               <button
                 type="button"
                 onClick={extractAll}
-                disabled={!agreed}
                 className="mt-2 rounded bg-teal-700 px-4 py-1.5 text-white disabled:opacity-50"
               >
                 Отправить и извлечь факты из всех

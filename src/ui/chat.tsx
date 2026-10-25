@@ -68,8 +68,8 @@ export function ChatPanel({ compact = false }: { compact?: boolean }) {
   const [q, setQ] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Off by default: the question and found facts leave the computer only when the user turns this on.
-  const [useModel, setUseModel] = useState(false);
+  // With a connected model every question goes to it (the user turned the consent box off); otherwise the template answers.
+  const useModel = !!liveModel;
   const endRef = useRef<HTMLDivElement>(null);
 
   const loaded = history.data ?? [];
@@ -84,7 +84,7 @@ export function ChatPanel({ compact = false }: { compact?: boolean }) {
     setBusy(true);
     setError(null);
     try {
-      const fresh = await postJson<ChatMessage[]>(`${base}/chat`, { question, useModel: useModel && !!liveModel });
+      const fresh = await postJson<ChatMessage[]>(`${base}/chat`, { question, useModel });
       setAdded((m) => [...m, ...fresh]);
       setQ("");
     } catch (e) {
@@ -145,12 +145,9 @@ export function ChatPanel({ compact = false }: { compact?: boolean }) {
         </button>
       </form>
       {liveModel && (
-        <label className="mt-2 flex items-start gap-2 text-xs text-slate-600">
-          <input type="checkbox" checked={useModel} onChange={(e) => setUseModel(e.target.checked)} className="mt-0.5" />
-          <span>
-            Отвечать с помощью {liveModel.provider} ({liveModel.model}): вопрос, текущее состояние и найденные факты будут отправлены в {liveModel.provider}. Без отметки ответ собирается локально по шаблону.
-          </span>
-        </label>
+        <p className="mt-2 text-xs text-slate-600">
+          Отвечает {liveModel.provider} ({liveModel.model}): вопрос, текущее состояние и найденные факты отправляются в {liveModel.provider}.
+        </p>
       )}
       {error && <p role="alert" className="mt-2 text-sm text-red-700">{error}</p>}
     </Card>

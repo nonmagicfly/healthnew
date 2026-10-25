@@ -523,10 +523,9 @@ function Retranscribe({ doc, onDone }: { doc: SourceDocument; onDone: () => void
   );
 }
 
-/** Sends one document to the connected model, only after the user ticks the consent box. */
+/** Sends one document to the connected model when the user presses the button (no separate consent box, by the user's choice). */
 function ModelExtract({ doc, onDone }: { doc: SourceDocument; onDone: () => void }) {
   const { liveModel, base } = useProfile();
-  const [agreed, setAgreed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   if (!liveModel) return null;
@@ -551,13 +550,9 @@ function ModelExtract({ doc, onDone }: { doc: SourceDocument; onDone: () => void
         </p>
       )}
       <p className="text-sm text-slate-700">
-        Текст документа (а для PDF без текстового слоя сам файл) будет отправлен в {liveModel.provider}, модель {liveModel.model}. Модель только предлагает факты: вы увидите их в карточке и решите, что добавить. Без вашего согласия ничего не отправляется.
+        Текст документа (а для PDF без текстового слоя сам файл) будет отправлен в {liveModel.provider}, модель {liveModel.model}. Модель только предлагает факты: вы увидите их в карточке и решите, что добавить.
       </p>
-      <label className="mt-2 flex items-start gap-2 text-sm">
-        <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} className="mt-1" />
-        <span>Согласен отправить этот документ в {liveModel.provider}</span>
-      </label>
-      <button type="button" onClick={send} disabled={!agreed || busy} className="mt-2 rounded bg-teal-700 px-4 py-1.5 text-sm text-white disabled:opacity-50">
+      <button type="button" onClick={send} disabled={busy} className="mt-2 rounded bg-teal-700 px-4 py-1.5 text-sm text-white disabled:opacity-50">
         {busy ? "Модель читает документ…" : "Отправить и извлечь факты"}
       </button>
       {error && <p role="alert" className="mt-2 text-sm text-red-700">{error}</p>}
