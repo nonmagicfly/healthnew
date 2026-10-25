@@ -280,3 +280,33 @@ test("documents are laid out in folders by type and section, and labels can be c
   await page.getByLabel("Раскладка").selectOption("clinic");
   await expect(folders.getByRole("button", { name: /^Лаборатория Тест/ })).toBeVisible();
 });
+
+test("doctors page sums up visits by specialty and answers a question about selected documents", async ({ page }) => {
+  await useProfile(page, "me");
+  await page.goto("/documents");
+  const visit = [
+    "Клиника Тестовая",
+    "Дата: 07.05.2026",
+    "ОСМОТР НЕВРОЛОГА",
+    "Жалобы: на головную боль.",
+    "Основное заболевание: (заключительный) Головная боль напряжения. (G44.2)",
+    "Медикаментозная терапия: Магния цитрат (МАГНИЙ ТАБ. 500 МГ), по 1 таб. 2 раз/дн., длительность 1 мес., внутрь (per os).",
+  ].join("\n");
+  await page.getByLabel(/Файл \(PDF/).setInputFiles([{ name: "невролог.txt", mimeType: "text/plain", buffer: Buffer.from(visit) }]);
+  await expect(page).toHaveURL(/\/documents\/.+/);
+  await page.goto("/documents");
+  await page.getByRole("button", { name: "Добавить все в историю" }).click();
+  await expect(page.getByText(/Добавлено в историю/)).toBeVisible();
+
+  await page.goto("/doctors");
+  const folder = page.locator("section").filter({ hasText: "Невролог" });
+  await expect(folder.getByText("Головная боль напряжения (G44.2)").first()).toBeVisible();
+  await expect(folder.getByText(/Магния цитрат 500 мг/).first()).toBeVisible();
+
+  await page.getByRole("checkbox", { name: /Выбрать «Осмотр невролога/ }).check();
+  await page.getByRole("button", { name: "Спросить по выбранным" }).click();
+  const dialog = page.getByRole("dialog", { name: "Вопрос по выбранным документам" });
+  await dialog.getByLabel("Что хотите узнать").fill("Какие препараты назначены?");
+  await dialog.getByRole("button", { name: "Спросить", exact: true }).click();
+  await expect(dialog.getByText("Вопрос и ответ сохранены в чате")).toBeVisible();
+});

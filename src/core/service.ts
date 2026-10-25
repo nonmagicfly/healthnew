@@ -38,11 +38,12 @@ import {
 } from "./rules/facts";
 import { buildState, stateToText } from "./rules/state";
 import { buildDecisions } from "./rules/decisions";
+import { buildDoctors } from "./rules/doctors";
 import { buildDoctorSummary } from "./rules/summary";
 import { buildIndicatorView, findMatchingResult, listIndicators } from "./rules/series";
 import { buildTimeline, groupTimeline } from "./rules/timeline";
 import { retrieveFacts } from "./rules/retrieval";
-import { buildLlmRequest } from "./rules/llm-request";
+import { buildDocumentsRequest, buildLlmRequest } from "./rules/llm-request";
 import { exactDate, unknownDate } from "./rules/dates";
 import { normalizeUnit, parseLabValue } from "./rules/lab-values";
 import { indicatorOf } from "./indicators";
@@ -914,6 +915,61 @@ export class HealthService {
       })),
     );
     return buildDecisions(await this.listFacts(profileId), withPatient, this.now().slice(0, 10));
+  }
+
+  async doctors(profileId: string) {
+    const [docs, facts, encounters] = await Promise.all([this.d.repo.listDocuments(profileId), this.listFacts(profileId), this.d.repo.listEncounters(profileId)]);
+    return buildDoctors(docs, facts, encounters, this.now().slice(0, 10));
+  }
+
+  /**
+   * A question about documents the user selected. Without consent it is answered from their facts by the
+   * template, locally; with consent their text and facts go to the connected model. Saved to the chat.
+   */
+  async askAboutDocuments(profileId: string, documentIds: string[], question: string, opts: { useModel?: boolean } = {}): Promise<ChatMessage[]> {
+    await this.profile(profileId);
+    const q = question.trim();
+    if (!q) throw new ValidationError("Вопрос пустой");
+    const ids = [...new Set(documentIds)].slice(0, 30);
+    if (!ids.length) throw new ValidationError("Выберите хотя бы один документ");
+    if (opts.useModel && !this.d.live) throw new ValidationError("Модель не подключена: укажите ключ API в .env.local.");
+    const docs = (await Promise.all(ids.map((id) => this.d.repo.getDocument(profileId, id)))).filter((d): d is SourceDocument => !!d);
+    if (!docs.length) throw new NotFoundError("Документы не найдены");
+    const chosen = new Set(docs.map((d) => d.id));
+    const facts = (await this.d.repo.listFacts(profileId)).filter((f) => f.verification !== "rejected" && f.sources.some((s) => chosen.has(s.documentId)));
+    const texts = opts.useModel
+      ? await Promise.all(
+          docs.map(async (d) => {
+            const v = (await this.d.repo.listVersions(profileId, d.id)).find((x) => x.method !== "prepared");
+            const text = !v ? "" : v.segments.length ? v.segments.map((s) => `${s.speakerLabel ? `${s.speakerLabel}: ` : ""}${s.text}`).join("\n") : v.pages.join("\n");
+            return { title: d.title, date: d.documentDate, text };
+          }),
+        )
+      : docs.map((d) => ({ title: d.title, date: d.documentDate, text: "" }));
+    const request = buildDocumentsRequest(q, facts, texts);
+    let answer;
+    try {
+      answer = await (opts.useModel ? this.d.live!.chat : this.d.llm).answer(request);
+    } catch (e) {
+      throw new ExternalServiceError(e instanceof Error && e.message ? e.message : "Модель не ответила.");
+    }
+    const at = this.now();
+    const titles = docs.map((d) => `«${d.title}»`).join(", ");
+    const userMsg: ChatMessage = { id: this.d.ids.next("msg"), profileId, role: "user", text: `${q}\n(по документам: ${titles})`, segments: [], usedContext: [], mode: null, createdAt: at };
+    const used = new Set(answer.usedFactIds);
+    const assistant: ChatMessage = {
+      id: this.d.ids.next("msg"),
+      profileId,
+      role: "assistant",
+      text: answer.segments.map((s) => s.text).join("\n"),
+      segments: request.truncated ? [...answer.segments, { kind: "caution", text: "Документы длинные: часть текста не поместилась и не была передана модели.", factIds: [], sources: [] }] : answer.segments,
+      usedContext: facts.map((f) => ({ factId: f.id, label: f.label, reason: used.has(f.id) ? "Использовано в ответе" : "Из выбранного документа" })),
+      mode: answer.mode,
+      createdAt: at,
+    };
+    await this.d.repo.saveMessage(userMsg);
+    await this.d.repo.saveMessage(assistant);
+    return [userMsg, assistant];
   }
 
   async state(profileId: string) {

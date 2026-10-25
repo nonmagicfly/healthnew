@@ -12,6 +12,7 @@ const NAV = [
   { href: "/", label: "Моё состояние" },
   { href: "/indicators", label: "Показатели" },
   { href: "/documents", label: "Документы" },
+  { href: "/doctors", label: "Врачи" },
   { href: "/decisions", label: "Решения" },
   { href: "/history", label: "История" },
   { href: "/chat", label: "Чат" },

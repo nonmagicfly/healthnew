@@ -47,6 +47,36 @@ export function buildLlmRequest(question: string, facts: Fact[], stateSummary: s
   return { system: SYSTEM_INSTRUCTIONS, question, untrustedContext, contextFacts: facts, stateSummary };
 }
 
+/** Most text of the chosen documents that goes to the model in one question. */
+export const DOCUMENTS_TEXT_LIMIT = 60_000;
+
+/**
+ * A question about documents the user chose: their facts plus their text, both inside the untrusted block.
+ * Text beyond the limit is cut and the model is told so.
+ */
+export function buildDocumentsRequest(question: string, facts: Fact[], documents: { title: string; date: string | null; text: string }[]): LlmRequest & { truncated: boolean } {
+  let left = DOCUMENTS_TEXT_LIMIT;
+  let truncated = false;
+  const blocks = documents.map((d, i) => {
+    const text = d.text.slice(0, Math.max(0, left));
+    if (text.length < d.text.length) truncated = true;
+    left -= text.length;
+    return [`Документ ${i + 1}: ${escapeUntrusted(d.title)}; дата: ${d.date ?? "неизвестна"}`, escapeUntrusted(text) || "(текст не передан)"].join("\n");
+  });
+  const untrustedContext = [
+    "<untrusted_data>",
+    "Документы, которые выбрал человек:",
+    ...blocks,
+    truncated ? "(Часть текста не поместилась и не передана.)" : "",
+    "",
+    "Факты из этих документов:",
+    ...facts.map(factLine),
+    "</untrusted_data>",
+  ].join("\n");
+  const system = `${SYSTEM_INSTRUCTIONS}\n- Отвечай только по выбранным документам. Если в них нет ответа, так и скажи.`;
+  return { system, question, untrustedContext, contextFacts: facts, stateSummary: "", truncated };
+}
+
 // ---------- Fact extraction ----------
 
 export const EXTRACTION_INSTRUCTIONS = `Ты извлекаешь структурированные факты из медицинского документа человека для его личной истории здоровья.
