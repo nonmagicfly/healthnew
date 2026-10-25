@@ -72,7 +72,7 @@ describe("extraction with a connected model", () => {
     const fake = new FakeModel(() => EXTRACTION);
     const { service, document } = await uploadTranscript(liveModel(fake));
     expect(document.status).toBe("extraction_ready");
-    expect(document.statusMessage).toMatch(/только после вашего согласия/);
+    expect(document.statusMessage).toMatch(/по кнопке/);
     await expect(service.extractWithModel("me", document.id, false)).rejects.toThrow(ValidationError);
     expect(fake.calls).toHaveLength(0);
   });

@@ -53,7 +53,6 @@ export function AskSelected({
   const { base, liveModel, bump } = useProfile();
   const dialog = useRef<HTMLDialogElement>(null);
   const [question, setQuestion] = useState("");
-  const [useModel, setUseModel] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [answer, setAnswer] = useState<ChatMessage | null>(null);
@@ -67,7 +66,7 @@ export function AskSelected({
       const msgs = await postJson<ChatMessage[]>(`${base}/chat/documents`, {
         documentIds: [...selected.keys()],
         question,
-        useModel: useModel && !!liveModel,
+        useModel: !!liveModel,
       });
       setAnswer(msgs.at(-1) ?? null);
       bump();
@@ -127,19 +126,10 @@ export function AskSelected({
             />
           </label>
           {liveModel ? (
-            <label className="flex items-start gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={useModel}
-                onChange={(e) => setUseModel(e.target.checked)}
-                className="mt-0.5"
-              />
-              <span>
-                Отправить текст выбранных документов и их факты в{" "}
-                {liveModel.provider} ({liveModel.model}). Без отметки ответ
-                собирается локально по фактам из этих документов.
-              </span>
-            </label>
+            <p className="text-sm text-slate-600">
+              Текст выбранных документов и их факты отправляются в{" "}
+              {liveModel.provider} ({liveModel.model}).
+            </p>
           ) : (
             <p className="text-sm text-slate-600">
               Модель не подключена: ответ соберётся локально по фактам из этих
