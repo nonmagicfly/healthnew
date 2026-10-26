@@ -1,4 +1,4 @@
-import type { LabValue, Reference } from "../model";
+import type { LabResultValue, LabValue, Reference } from "../model";
 
 const NUM = String.raw`[-+]?\d+(?:[.,]\d+)?`;
 
@@ -76,6 +76,20 @@ export function referenceFlag(v: LabValue, stored: Reference | null): "low" | "h
   if (ref.high !== null && v.number > ref.high) return "high";
   if (ref.low === null && ref.high === null) return null;
   return "normal";
+}
+
+/** The lab's own arrow next to the value in the quoted row («см. комментарий↑ 6.4»); it wins over the reference. */
+export function labArrowFlag(quote: string, raw: string): "high" | "low" | null {
+  const esc = raw.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const m = esc ? quote.match(new RegExp(String.raw`([↑↓])\s*${esc}\s*$`)) : null;
+  return m ? (m[1] === "↑" ? "high" : "low") : null;
+}
+
+/** Flag of a stored result: the lab's arrow, else the value against the reference. */
+export function resultFlag(f: { originalText: string; value: { kind: string } }): "low" | "high" | "normal" | null {
+  if (f.value.kind !== "lab_result") return null;
+  const v = f.value as LabResultValue;
+  return labArrowFlag(f.originalText ?? "", v.value.raw) ?? referenceFlag(v.value, v.reference);
 }
 
 /** Normalizes a unit string for comparability checks only; the original unit is kept. */

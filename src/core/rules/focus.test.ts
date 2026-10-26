@@ -95,6 +95,23 @@ describe("focus areas", () => {
     expect(again.usedContext.map((u) => u.factId)).toContain("fact_cold");
   });
 
+  it("keeps the lab's own arrow when the reference is only «см. комментарий»", async () => {
+    const { service } = await createTestService();
+    const form = [
+      "Биохимический анализ крови",
+      "Дата: 10.02.2026 ТЕСТОВФамилия:",
+      "Наименование исследования Результат Ед. изм. Нормальные значенияФлаг",
+      "Холестерин общий ммоль/л см. комментарий↑ 6.4",
+      "Пороговые значения для здоровых людей: менее 5 ммоль/л (190 мг/дл);",
+      "Триглицериды ммоль/л см. комментарий1.20",
+    ].join("\n");
+    const { document } = await service.upload("me", { fileName: "липиды.txt", mime: "text/plain", bytes: enc(form), kind: "lab_report" });
+    await service.applyProposal("me", document.id, { acceptedStateChanges: [], postponedClarifications: [] });
+    const cardio = (await service.focus("me")).cards.find((c) => c.id === "cardio")!;
+    expect(cardio.metrics.find((m) => m.code === "chol")!.last).toMatchObject({ raw: "6.4", flag: "high" });
+    expect(cardio.metrics.find((m) => m.code === "tg")!.last.flag).toBeNull();
+  });
+
   it("validates the user's own areas", async () => {
     const { service } = await createTestService();
     await expect(service.setFocusSettings("me", { custom: [{ title: "Спина", keywords: "" }] })).rejects.toThrow(/хотя бы одно слово/);
