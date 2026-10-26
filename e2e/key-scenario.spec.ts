@@ -322,7 +322,7 @@ test("focus page keeps what matters and hides a cold from the documents list", a
     "Основное заболевание: (заключительный) Желудочковая экстрасистолия. (I49.3)",
     "Назначена повторная явка на 20.06.2030",
   ].join("\n");
-  const cold = "Справка. Осмотр терапевта: насморк, кашель. Диагноз: ОРВИ.";
+  const cold = ["Клиника Тестовая", "Дата: 14.05.2026", "ОСМОТР ТЕРАПЕВТА", "Жалобы: на насморк, кашель.", "Основное заболевание: (заключительный) ОРВИ. (J06.9)"].join("\n");
   await page.getByLabel(/Файл \(PDF/).setInputFiles([
     { name: "кардиолог.txt", mimeType: "text/plain", buffer: Buffer.from(cardio) },
     { name: "простуда.txt", mimeType: "text/plain", buffer: Buffer.from(cold) },
@@ -336,11 +336,11 @@ test("focus page keeps what matters and hides a cold from the documents list", a
   await expect(card.getByText(/20\.06\.2030/)).toBeVisible();
   // Other tests share this data directory, so only this test's cold note is checked by name.
   await page.getByText(/Вне фокуса: \d+/).click();
-  await expect(page.getByRole("link", { name: "простуда" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Осмотр терапевта" })).toBeVisible();
 
   await page.goto("/documents");
   await expect(page.getByText(/Показать документы вне фокуса/)).toBeVisible();
-  await expect(page.getByRole("link", { name: "простуда" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Осмотр терапевта" })).toHaveCount(0);
   await page.getByText(/Показать документы вне фокуса/).click();
-  await expect(page.getByRole("link", { name: "простуда" }).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: "Осмотр терапевта" }).first()).toBeVisible();
 });

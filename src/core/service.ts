@@ -1089,6 +1089,9 @@ export class HealthService {
       builtIn: DEFAULT_FOCUS_AREAS.map((a) => ({ id: a.id, title: a.title, description: a.description, enabled: !profile.focus?.disabled.includes(a.id) })),
       custom: profile.focus?.custom ?? [],
       outOfFocus: out.map((d) => ({ id: d.id, title: d.title, documentDate: d.documentDate, manual: focus.get(d.id)!.manual })),
+      unsorted: docs
+        .filter((d) => focus.get(d.id)?.status === "unknown")
+        .map((d) => ({ id: d.id, title: d.title, documentDate: d.documentDate })),
     };
   }
 

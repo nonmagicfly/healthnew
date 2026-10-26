@@ -13,6 +13,7 @@ interface FocusData {
   builtIn: { id: string; title: string; description: string; enabled: boolean }[];
   custom: CustomFocusArea[];
   outOfFocus: { id: string; title: string; documentDate: string | null; manual: boolean }[];
+  unsorted: { id: string; title: string; documentDate: string | null }[];
 }
 
 const TREND = { up: "↑", down: "↓", same: "→" } as const;
@@ -182,6 +183,22 @@ export function FocusView() {
         ))}
       </div>
       <Settings data={d} onSaved={bump} />
+      {d.unsorted.length > 0 && (
+        <details className="rounded-lg border border-slate-200 bg-white p-3">
+          <summary className="cursor-pointer text-sm text-slate-700">Ещё не разобраны: {d.unsorted.length}</summary>
+          <p className="mt-2 text-sm text-slate-600">Из этих документов пока ничего не извлечено, поэтому область не определена. Они не скрыты и попадут в фокус или выйдут из него после разбора.</p>
+          <ul className="mt-2 space-y-1 text-sm">
+            {d.unsorted.map((o) => (
+              <li key={o.id} className="flex flex-wrap items-center gap-2">
+                <span className="text-slate-500">{formatIso(o.documentDate)}</span>
+                <Link href={`/documents/${o.id}`} className="text-teal-800 underline">
+                  {o.title}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
       <details className="rounded-lg border border-slate-200 bg-white p-3">
         <summary className="cursor-pointer text-sm text-slate-700">Вне фокуса: {d.outOfFocus.length}</summary>
         {d.outOfFocus.length === 0 ? (

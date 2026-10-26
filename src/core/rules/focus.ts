@@ -42,7 +42,7 @@ export const DEFAULT_FOCUS_AREAS: FocusAreaDef[] = [
     specialties: ["уролог", "андролог"],
     indicators: ["psa", "psa_free", "testosterone"],
     icd: ["N40", "N41", "N42", "N20", "N13", "N30", "N34", "N52", "C61"],
-    titleWords: /трузи|простат|уролог|узи почек|мочев(ого|ой) пузыр|пса/i,
+    titleWords: /трузи|простат|уролог|узи почек|мочев(ого|ой) пузыр|пса|анализ мочи|(^|[^а-яё])оам([^а-яё]|$)/i,
     textWords: /трузи|простат|(^|[^а-яё])пса([^а-яё]|$)|аденом|мочекаменн|нефролитиаз|уретрит|цистит|эректил/i,
     custom: false,
   },
@@ -53,7 +53,7 @@ export const DEFAULT_FOCUS_AREAS: FocusAreaDef[] = [
     specialties: ["гастроэнтеролог", "гепатолог", "колопроктолог", "проктолог", "эндоскопист"],
     indicators: ["alt", "ast", "ggt", "bili", "bili_direct", "alp", "amylase"],
     icd: ["K", "B18", "C16", "C18", "C20"],
-    titleWords: /брюшн|колоноскоп|фгдс|эгдс|гастроскоп|гастро|печен|желч|кишечн|эндоскоп|helicobacter|хеликобакт/i,
+    titleWords: /брюшн|колоноскоп|фгдс|эгдс|гастроскоп|гастро|печен|желч|кишечн|эндоскоп|helicobacter|хеликобакт|(^|[^а-яё])кала([^а-яё]|$)|копрогр/i,
     textWords: /колоноскоп|фгдс|эгдс|гастроскоп|гастрит|рефлюкс|гэрб|холецистит|желчнокаменн|панкреатит|гепатоз|стеатоз|хеликобакт|helicobacter|дивертикул|раздражённого кишечника|раздраженного кишечника|сибр/i,
     custom: false,
   },
@@ -64,7 +64,7 @@ export const DEFAULT_FOCUS_AREAS: FocusAreaDef[] = [
     specialties: ["гематолог"],
     indicators: ["ferritin", "iron", "transferrin", "tsat", "tibc", "hgb"],
     icd: ["D50", "D51", "D52", "D53", "D64", "E83.1"],
-    titleWords: /феррит|желез|анеми/i,
+    titleWords: /феррит|желез|анеми|клинический анализ крови|общий анализ крови|(^|[^а-яё])оак([^а-яё]|$)/i,
     textWords: /ферритин|железодефицит|анеми|гемохроматоз/i,
     custom: false,
   },
@@ -75,13 +75,23 @@ export const DEFAULT_FOCUS_AREAS: FocusAreaDef[] = [
     specialties: ["эндокринолог", "нефролог"],
     indicators: ["glucose", "hba1c", "creatinine", "urea", "uric", "vitd", "tsh", "ft4", "b12"],
     icd: ["E0", "E1", "E21", "E55", "E66", "M10", "N18"],
-    titleWords: /глюкоз|гликир|диабет|щитовид|ттг|витамин d|эндокрин/i,
+    titleWords: /глюкоз|гликир|диабет|щитовид|ттг|витамин d|эндокрин|гормон/i,
     textWords: /сахарн(ый|ого) диабет|преддиабет|инсулинорезист|гипотиреоз|гипертиреоз|тиреоидит|ожирени|подагр|гиперурикеми|хроническ(ая|ой) болезн(ь|и) почек/i,
     custom: false,
   },
 ];
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Names of the area's indicators in a text not parsed into results yet: long names only, short ones («fe», «аст») match by chance. */
+const indicatorNames = new Map<string, RegExp | null>();
+function indicatorWords(a: FocusAreaDef): RegExp | null {
+  if (!indicatorNames.has(a.id)) {
+    const names = a.indicators.flatMap((c) => indicatorByCode(c)?.aliases ?? []).filter((n) => n.length >= 5);
+    indicatorNames.set(a.id, names.length ? new RegExp(`(^|[^а-яёa-z])(${names.map(escape).join("|")})([^а-яёa-z]|$)`, "i") : null);
+  }
+  return indicatorNames.get(a.id)!;
+}
 
 /** Built-in areas that are on, then the user's own ones. */
 export function focusAreas(settings: FocusSettings | undefined): FocusAreaDef[] {
@@ -120,13 +130,14 @@ export function documentFocus(doc: SourceDocument, facts: Fact[], text: string, 
         a.indicators.some((c) => codes.has(c)) ||
         icd.some((c) => a.icd.some((p) => c.startsWith(p))) ||
         (a.titleWords?.test(labels) ?? false) ||
-        (a.textWords?.test(text) ?? false),
+        (a.textWords?.test(text) ?? false) ||
+        (!codes.size && !a.custom && (indicatorWords(a)?.test(text) ?? false)),
     )
     .map((a) => a.id);
   if (doc.focusOverride === "in") return { areas: matched, status: "in", manual: true };
   if (doc.focusOverride === "out") return { areas: matched, status: "out", manual: true };
-  // Nothing read from it yet (a scan, a recording being transcribed): not hidden until there is something to judge by.
-  if (!matched.length && !own.length && !text.trim()) return { areas: [], status: "unknown", manual: false };
+  // Nothing taken from it yet (a scan, a recording being transcribed, a text waiting for the model): not hidden until there is something to judge by.
+  if (!matched.length && !own.length) return { areas: [], status: "unknown", manual: false };
   return { areas: matched, status: matched.length ? "in" : "out", manual: false };
 }
 

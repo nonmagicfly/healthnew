@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createTestService } from "@/adapters/testing";
 import { documentFocus, focusAreas } from "./focus";
-import type { SourceDocument } from "../model";
+import type { Fact, SourceDocument } from "../model";
 
 // Invented documents only.
 const doc = (o: Partial<SourceDocument>): SourceDocument => ({
@@ -23,6 +23,8 @@ const doc = (o: Partial<SourceDocument>): SourceDocument => ({
   ...o,
 });
 const areas = focusAreas(undefined);
+// Something already taken from doc_x, so the rules have more than the title to judge by.
+const taken = [{ type: "complaint", label: "Насморк", verification: "unverified", sources: [{ documentId: "doc_x" }], value: { kind: "text", text: "Насморк" } } as unknown as Fact];
 const enc = (s: string) => new TextEncoder().encode(s);
 
 const ROUTINE = "Осмотр терапевта. Жалобы: насморк, кашель. АД 120/80. Тоны сердца ясные, ритмичные. Живот мягкий, печень не увеличена. Диагноз: ОРВИ.";
@@ -33,8 +35,21 @@ describe("focus areas", () => {
     expect(documentFocus(doc({ specialist: "Врач-уролог" }), [], "", areas).areas).toEqual(["uro"]);
     expect(documentFocus(doc({ title: "Консультация" }), [], "Рекомендована колоноскопия.", areas).areas).toEqual(["gastro"]);
     // Routine words of any visit (blood pressure, heart sounds, a soft abdomen) do not put a cold in focus.
-    expect(documentFocus(doc({ specialist: "терапевт" }), [], ROUTINE, areas)).toMatchObject({ status: "out", areas: [] });
+    expect(documentFocus(doc({ specialist: "терапевт" }), taken, ROUTINE, areas)).toMatchObject({ status: "out", areas: [] });
     expect(documentFocus(doc({ status: "transcribing" }), [], "", areas).status).toBe("unknown");
+    // A text nothing was taken from yet is not hidden on the strength of its title alone.
+    expect(documentFocus(doc({ kind: "other", title: "Протокол" }), [], ROUTINE, areas).status).toBe("unknown");
+  });
+
+  it("places lab forms and tests by their title or the indicators they name before they are parsed", () => {
+    const lab = (title: string, text = "") => documentFocus(doc({ kind: "lab_report", title, status: "extraction_ready" }), [], text, areas).areas;
+    expect(lab("Исследование кала")).toEqual(["gastro"]);
+    expect(lab("Клинический анализ крови")).toEqual(["iron"]);
+    expect(lab("Клинический анализ мочи")).toEqual(["uro"]);
+    expect(lab("Гормональные исследования")).toEqual(["metabolic"]);
+    expect(lab("Лаборатория - Результаты исследований", "Холестерин общий 5,9 ммоль/л\nФерритин 120 нг/мл")).toEqual(["cardio", "iron"]);
+    // Short names such as «АСТ» or «Fe» do not count: they turn up inside other words.
+    expect(lab("Лаборатория", "Пастеризация, FeNO")).toEqual([]);
   });
 
   it("lets the user's choice win and adds the user's own areas", () => {
@@ -59,6 +74,10 @@ describe("focus areas", () => {
       await service.applyProposal("me", document.id, { acceptedStateChanges: [], postponedClarifications: [] });
     }
     const cold = await service.upload("me", { fileName: "простуда.txt", mime: "text/plain", bytes: enc(ROUTINE), kind: "note" });
+    // Nothing taken from the note yet: it waits, not hidden.
+    expect((await service.focus("me")).unsorted.map((o) => o.id)).toEqual([cold.document.id]);
+    const any = (await repo.listFacts("me"))[0];
+    await repo.saveFact({ ...any, id: "fact_cold", type: "complaint", label: "Кашель", value: { kind: "text", text: "Кашель" }, sources: [{ ...any.sources[0], documentId: cold.document.id }] });
 
     const focus = await service.focus("me");
     const iron = focus.cards.find((c) => c.id === "iron")!;
@@ -68,8 +87,6 @@ describe("focus areas", () => {
     expect((await service.listDocuments("me")).find((r) => r.document.id === cold.document.id)!.focus.status).toBe("out");
 
     // A fact read from the cold note never reaches the chat context.
-    const any = (await repo.listFacts("me"))[0];
-    await repo.saveFact({ ...any, id: "fact_cold", type: "complaint", label: "Кашель", value: { kind: "text", text: "Кашель" }, sources: [{ ...any.sources[0], documentId: cold.document.id }] });
     const [, answer] = await service.ask("me", "Был ли кашель?");
     expect(answer.usedContext.map((u) => u.factId)).not.toContain("fact_cold");
 
