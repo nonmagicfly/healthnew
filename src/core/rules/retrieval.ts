@@ -1,6 +1,6 @@
 import type { Fact } from "../model";
 import { indicatorOf, INDICATORS, qualitativeIndicatorOf } from "../indicators";
-import { referenceFlag } from "./lab-values";
+import { resultFlag } from "./lab-values";
 
 export type Topic = "medication" | "indicator" | "complaint" | "allergy" | "visits" | "abnormal";
 
@@ -83,6 +83,6 @@ export function retrieveFacts(question: string, allFacts: Fact[]): Retrieval {
 /** A lab-form result outside the lab's own reference range. */
 export function outOfReference(f: Fact): "high" | "low" | null {
   if (f.value.kind !== "lab_result" || f.value.origin !== "lab_report") return null;
-  const flag = referenceFlag(f.value.value, f.value.reference);
+  const flag = resultFlag(f);
   return flag === "high" || flag === "low" ? flag : null;
 }

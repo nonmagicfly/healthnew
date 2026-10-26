@@ -1,7 +1,7 @@
 import type { Fact, ISODate, LabResultValue, Reference } from "../model";
 import { indicatorByCode, indicatorOf, INDICATORS, qualitativeIndicatorOf, type IndicatorDef } from "../indicators";
 import { formatDateValue, inPeriod, sortableDate } from "./dates";
-import { plottableNumber, referenceFlag, seriesKey } from "./lab-values";
+import { plottableNumber, referenceFlag, resultFlag, seriesKey } from "./lab-values";
 import { unescapeModelText } from "./llm-request";
 
 export interface SeriesPoint {
@@ -106,7 +106,7 @@ export function buildIndicatorView(
       documentId: f.sources[0].documentId,
       plotted,
       notPlottedReason: reason ?? (inRange ? null : "Вне выбранного периода"),
-      flag: referenceFlag(f.value.value, f.value.reference),
+      flag: resultFlag(f),
     });
 
     if (!plotted || x === null) continue;
@@ -120,7 +120,7 @@ export function buildIndicatorView(
       raw: f.value.value.raw,
       valueType: f.value.value.type,
       reference: f.value.reference,
-      flag: referenceFlag(f.value.value, f.value.reference),
+      flag: resultFlag(f),
       documentId: f.sources[0].documentId,
     });
     seriesMap.set(key, s);

@@ -1,7 +1,7 @@
 import type { Fact, SourceDocument } from "../model";
 import { indicatorByCode, indicatorOf } from "../indicators";
 import { buildState, type StateItem } from "./state";
-import { normalizeUnit, plottableNumber, referenceFlag } from "./lab-values";
+import { normalizeUnit, plottableNumber, resultFlag } from "./lab-values";
 import { sortableDate } from "./dates";
 
 export interface SummaryLab {
@@ -67,7 +67,7 @@ export function buildDoctorSummary(allFacts: Fact[], documents: SourceDocument[]
     const a = prev && prev.value.kind === "lab_result" ? plottableNumber(prev.value.value) : null;
     const b = plottableNumber(v.value);
     const def = indicatorByCode(code);
-    const flag = referenceFlag(v.value, v.reference);
+    const flag = resultFlag(last);
     labs.push({
       code,
       name: def?.name ?? v.rawName,
