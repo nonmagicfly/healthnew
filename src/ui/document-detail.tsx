@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "rea
 import { ensureFileChosen, FilePicker } from "./file-picker";
 import type { ContentVersion, Encounter, Fact, Proposal, ProposalItem, SourceDocument } from "@/core/model";
 import { MEDICATION_STATUS_LABEL } from "@/core/rules/facts";
+import type { DocumentFocus } from "@/core/rules/focus";
 import { formatDateValue } from "@/core/rules/dates";
 import { SPEAKER_LABEL } from "@/core/rules/transcript";
 import { indicatorOf, qualitativeIndicatorOf } from "@/core/indicators";
@@ -22,6 +23,7 @@ interface Detail {
   proposal: Proposal | null;
   encounter: Encounter | null;
   relatedDocuments: SourceDocument[];
+  focus: DocumentFocus & { titles: string[] };
 }
 
 const METHOD_LABEL: Record<ContentVersion["method"], { text: string; demo: boolean }> = {
@@ -418,6 +420,7 @@ export function DocumentDetailView() {
           {d.isSynthetic && <DemoBadge>Синтетический документ</DemoBadge>}
         </div>
         <DocumentLabels doc={d} onSaved={bump} />
+        <FocusLine doc={d} focus={detail.data.focus} onSaved={bump} />
         {search.get("duplicate") && (
           <p role="status" className="mt-2 rounded bg-sky-50 p-2 text-sm text-sky-900">
             Этот документ уже был загружен (тот же файл или копия с тем же текстом). Открыт существующий документ, дубль не создан.
@@ -557,6 +560,50 @@ function ModelExtract({ doc, onDone }: { doc: SourceDocument; onDone: () => void
       </button>
       {error && <p role="alert" className="mt-2 text-sm text-red-700">{error}</p>}
     </Card>
+  );
+}
+
+/** Whether the document is in focus, and the user's own choice that overrides the rules. */
+function FocusLine({ doc, focus, onSaved }: { doc: SourceDocument; focus: Detail["focus"]; onSaved: () => void }) {
+  const { base } = useProfile();
+  const [error, setError] = useState<string | null>(null);
+  const set = async (value: "in" | "out" | null) => {
+    setError(null);
+    try {
+      await api(`${base}/documents/${doc.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ focus: value }) });
+      onSaved();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  const link = "text-xs text-teal-800 underline";
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+      {focus.status === "out" ? (
+        <Badge tone="slate">Вне фокуса: не попадает в чат</Badge>
+      ) : focus.status === "unknown" ? (
+        <Badge tone="slate">Фокус определится после разбора</Badge>
+      ) : (
+        <Badge tone="teal">В фокусе{focus.titles.length ? `: ${focus.titles.join(", ")}` : ""}</Badge>
+      )}
+      {focus.manual && <span className="text-xs text-slate-500">(отмечено вами)</span>}
+      {focus.status !== "out" && (
+        <button type="button" onClick={() => set("out")} className={link}>
+          Убрать из фокуса
+        </button>
+      )}
+      {focus.status !== "in" && (
+        <button type="button" onClick={() => set("in")} className={link}>
+          Вернуть в фокус
+        </button>
+      )}
+      {focus.manual && (
+        <button type="button" onClick={() => set(null)} className={link}>
+          Решать автоматически
+        </button>
+      )}
+      {error && <span role="alert" className="text-red-700">{error}</span>}
+    </div>
   );
 }
 

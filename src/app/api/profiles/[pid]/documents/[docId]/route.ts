@@ -7,12 +7,14 @@ export async function GET(_req: Request, ctx: RouteContext<"/api/profiles/[pid]/
 
 /**
  * Changes the document date: body { documentDate: "YYYY-MM-DD" | null },
- * or its labels: body { labels: { kind?, area?, specialist?, institution? } }.
+ * its labels: body { labels: { kind?, area?, specialist?, institution? } },
+ * or the user's focus choice: body { focus: "in" | "out" | null }.
  */
 export async function PATCH(req: Request, ctx: RouteContext<"/api/profiles/[pid]/documents/[docId]">) {
   const { pid, docId } = await ctx.params;
   return handle(async (s) => {
     const body = await req.json().catch(() => null);
+    if (body && "focus" in body) return s.setDocumentFocus(pid, docId, body.focus);
     if (body?.labels && typeof body.labels === "object") {
       const l = body.labels;
       const opt = (v: unknown) => (v === undefined ? undefined : typeof v === "string" ? v : null);

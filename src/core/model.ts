@@ -11,6 +11,20 @@ export interface Profile {
   isDemo: boolean;
   /** Names printed on lab forms moved into this profile; used only to suggest where a new form belongs. */
   patientNames?: string[];
+  /** Focus areas: which built-in areas are off and the user's own areas. Absent: every built-in area is on. */
+  focus?: FocusSettings;
+}
+
+export interface CustomFocusArea {
+  id: string;
+  title: string;
+  /** Words looked up in the document's title, labels and text. */
+  keywords: string[];
+}
+
+export interface FocusSettings {
+  disabled: string[];
+  custom: CustomFocusArea[];
 }
 
 // ---------- Dates ----------
@@ -63,6 +77,8 @@ export interface SourceDocument {
   institution?: string | null;
   /** Set when the user edited type, section, doctor or clinic: these are no longer filled automatically. */
   labelsEditedAt?: ISODateTime | null;
+  /** The user's own choice: always in focus or never; null or absent: decided by the focus rules. */
+  focusOverride?: "in" | "out" | null;
   original: OriginalFile | null;
   /** Set when the document was opened from a built-in example with a prepared parse. */
   sampleKey: string | null;

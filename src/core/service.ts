@@ -14,6 +14,7 @@ import type {
   SourceDocument,
   SourceRef,
   TranscriptSegment,
+  FocusSettings,
 } from "./model";
 import type {
   Clock,
@@ -53,6 +54,7 @@ import { contentKey, normalizeIsoDate, proposalFromExtraction } from "./rules/ex
 import { parseLabForm } from "./rules/lab-form";
 import { parseConsultation } from "./rules/consultation";
 import { applyLabels, deriveLabels } from "./rules/labels";
+import { buildFocusCards, DEFAULT_FOCUS_AREAS, documentFocus, factsInFocus, focusAreas, type DocumentFocus } from "./rules/focus";
 
 export class NotFoundError extends Error {}
 export class ValidationError extends Error {}
@@ -265,11 +267,13 @@ export class HealthService {
     await this.profile(profileId);
     const docs = await this.d.repo.listDocuments(profileId);
     const facts = await this.d.repo.listFacts(profileId);
+    const { focus } = await this.focusOf(profileId, docs, facts);
     return docs
       .map((doc) => {
         const own = facts.filter((f) => f.sources.some((s) => s.documentId === doc.id));
         return {
           document: doc,
+          focus: focus.get(doc.id)!,
           factCount: own.length,
           unverifiedCount: own.filter((f) => f.verification === "unverified").length,
         };
@@ -288,8 +292,12 @@ export class HealthService {
     ]);
     const encounter = encounters.find((e) => e.id === document.encounterId) ?? null;
     const allDocs = encounter ? await this.d.repo.listDocuments(profileId) : [];
+    const areas = focusAreas((await this.profile(profileId)).focus);
+    const v = versions.find((x) => x.method !== "prepared");
+    const focus = documentFocus(document, facts, v ? [...v.pages, ...v.segments.map((x) => x.text)].join("\n").slice(0, 100_000) : "", areas);
     return {
       document,
+      focus: { ...focus, titles: focus.areas.map((id) => areas.find((a) => a.id === id)?.title ?? id) },
       versions,
       facts: facts.filter((f) => f.sources.some((s) => s.documentId === documentId)),
       proposal,
@@ -1048,6 +1056,76 @@ export class HealthService {
     return buildDecisions(await this.listFacts(profileId), withPatient, this.now().slice(0, 10));
   }
 
+  // ---------- Focus ----------
+
+  /** Focus areas of the profile and the areas of each document, by rules only. */
+  private async focusOf(profileId: string, docs?: SourceDocument[], facts?: Fact[]) {
+    const profile = await this.profile(profileId);
+    const areas = focusAreas(profile.focus);
+    docs ??= await this.d.repo.listDocuments(profileId);
+    facts ??= await this.d.repo.listFacts(profileId);
+    const focus = new Map<string, DocumentFocus>();
+    for (const d of docs) {
+      const v = (await this.d.repo.listVersions(profileId, d.id)).find((x) => x.method !== "prepared");
+      const text = v ? [...v.pages, ...v.segments.map((x) => x.text)].join("\n").slice(0, 100_000) : "";
+      focus.set(d.id, documentFocus(d, facts, text, areas));
+    }
+    return { profile, areas, focus };
+  }
+
+  /** Ids of documents out of focus: hidden by default and never part of what goes to a model. */
+  private async outOfFocus(profileId: string): Promise<Set<string>> {
+    const { focus } = await this.focusOf(profileId);
+    return new Set([...focus].filter(([, f]) => f.status === "out").map(([id]) => id));
+  }
+
+  async focus(profileId: string) {
+    const docs = await this.d.repo.listDocuments(profileId);
+    const facts = await this.d.repo.listFacts(profileId);
+    const { profile, areas, focus } = await this.focusOf(profileId, docs, facts);
+    const out = docs.filter((d) => focus.get(d.id)?.status === "out");
+    return {
+      cards: buildFocusCards(docs, focus, facts, areas, this.now().slice(0, 10)),
+      builtIn: DEFAULT_FOCUS_AREAS.map((a) => ({ id: a.id, title: a.title, description: a.description, enabled: !profile.focus?.disabled.includes(a.id) })),
+      custom: profile.focus?.custom ?? [],
+      outOfFocus: out.map((d) => ({ id: d.id, title: d.title, documentDate: d.documentDate, manual: focus.get(d.id)!.manual })),
+    };
+  }
+
+  async setFocusSettings(profileId: string, input: { disabled?: unknown; custom?: unknown }) {
+    const profile = await this.profile(profileId);
+    const known = new Set(DEFAULT_FOCUS_AREAS.map((a) => a.id));
+    const disabled = Array.isArray(input.disabled) ? [...new Set(input.disabled.filter((x): x is string => typeof x === "string" && known.has(x)))] : (profile.focus?.disabled ?? []);
+    const custom = Array.isArray(input.custom)
+      ? input.custom.flatMap((c: { id?: unknown; title?: unknown; keywords?: unknown }) => {
+          const title = typeof c?.title === "string" ? c.title.trim().slice(0, 60) : "";
+          const keywords = (Array.isArray(c?.keywords) ? c.keywords : typeof c?.keywords === "string" ? c.keywords.split(",") : [])
+            .filter((k: unknown): k is string => typeof k === "string")
+            .map((k: string) => k.trim().slice(0, 60))
+            .filter((k: string) => k.length >= 3)
+            .slice(0, 20);
+          if (!title || !keywords.length) return [];
+          const id = typeof c?.id === "string" && c.id.startsWith("custom_") ? c.id : this.d.ids.next("custom");
+          return [{ id, title, keywords }];
+        })
+      : (profile.focus?.custom ?? []);
+    if (Array.isArray(input.custom) && custom.length !== input.custom.length)
+      throw new ValidationError("У своей области нужно название и хотя бы одно слово длиной от 3 букв");
+    const focus: FocusSettings = { disabled, custom };
+    await this.d.repo.saveProfile({ ...profile, focus });
+    return this.focus(profileId);
+  }
+
+  /** The user's own choice for one document: in focus, out of focus, or back to the rules (null). */
+  async setDocumentFocus(profileId: string, documentId: string, override: unknown) {
+    const doc = await this.d.repo.getDocument(profileId, documentId);
+    if (!doc) throw new NotFoundError("Документ не найден");
+    if (override !== "in" && override !== "out" && override !== null) throw new ValidationError("Некорректная отметка фокуса");
+    const updated: SourceDocument = { ...doc, focusOverride: override };
+    await this.d.repo.saveDocument(updated);
+    return updated;
+  }
+
   async doctors(profileId: string) {
     const [docs, facts, encounters] = await Promise.all([this.d.repo.listDocuments(profileId), this.listFacts(profileId), this.d.repo.listEncounters(profileId)]);
     return buildDoctors(docs, facts, encounters, this.now().slice(0, 10));
@@ -1140,7 +1218,8 @@ export class HealthService {
     const q = question.trim();
     if (!q) throw new ValidationError("Вопрос пустой");
     if (opts.useModel && !this.d.live) throw new ValidationError("Модель не подключена: укажите ключ API в .env.local.");
-    const facts = await this.d.repo.listFacts(profileId);
+    // Only what is in focus is looked through and sent: a cold or a certificate does not crowd the context.
+    const facts = factsInFocus(await this.d.repo.listFacts(profileId), await this.outOfFocus(profileId));
     const state = buildState(facts, this.now().slice(0, 10));
     const retrieval = retrieveFacts(q, facts);
     const request = buildLlmRequest(q, retrieval.facts.map((r) => r.fact), stateToText(state));

@@ -3,10 +3,12 @@
 import { createContext, useCallback, useContext, useMemo, useState, useSyncExternalStore, type ReactNode } from "react";
 import type { Profile, SourceDocument } from "@/core/model";
 import type { SampleInfo } from "@/core/ports";
+import type { DocumentFocus } from "@/core/rules/focus";
 import { useApi } from "./api";
 
 interface DocumentListItem {
   document: SourceDocument;
+  focus: DocumentFocus;
   factCount: number;
   unverifiedCount: number;
 }

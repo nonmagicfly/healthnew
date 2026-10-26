@@ -9,6 +9,7 @@ import { postJson, useApi } from "./api";
 import type { Decisions } from "@/core/rules/decisions";
 
 const NAV = [
+  { href: "/focus", label: "Фокус" },
   { href: "/", label: "Моё состояние" },
   { href: "/indicators", label: "Показатели" },
   { href: "/documents", label: "Документы" },
