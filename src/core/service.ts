@@ -234,6 +234,25 @@ export class HealthService {
     return moved;
   }
 
+  /** The user says a form printed for another name is this profile's own: the question is closed and the name remembered. */
+  async claimDocument(profileId: string, documentId: string) {
+    const doc = await this.d.repo.getDocument(profileId, documentId);
+    if (!doc) throw new NotFoundError("Документ не найден");
+    const profile = await this.profile(profileId);
+    const patientKey = `llm:${documentId}:patient`;
+    const at = this.now();
+    for (const f of await this.d.repo.listFacts(profileId))
+      if (f.dedupKey === patientKey && f.value.kind === "clarification" && f.value.resolution !== "resolved")
+        await this.d.repo.saveFact(resolveClarification(f, `Документ профиля «${profile.name}»`, at));
+    const proposal = await this.d.repo.getProposal(profileId, documentId);
+    if (proposal) {
+      await this.d.repo.saveProposal(profileId, { ...proposal, items: proposal.items.filter((i) => i.key !== patientKey) });
+      if (proposal.patientName && !profile.patientNames?.some((n) => n.toLowerCase() === proposal.patientName!.toLowerCase()))
+        await this.d.repo.saveProfile({ ...profile, patientNames: [...(profile.patientNames ?? []), proposal.patientName] });
+    }
+    return doc;
+  }
+
   async profile(profileId: string): Promise<Profile> {
     const p = await this.d.repo.getProfile(profileId);
     if (!p) throw new NotFoundError("Профиль не найден");
@@ -557,7 +576,9 @@ export class HealthService {
     const owner = name
       ? (await this.d.repo.listProfiles()).find((p) => p.id !== doc.profileId && p.patientNames?.some((n) => n.toLowerCase() === name))
       : undefined;
-    if (parsed.patientName && ((others.size && !others.has(name!)) || owner)) {
+    // A name the user already confirmed for this profile is never questioned again.
+    const mine = name ? (await this.d.repo.getProfile(doc.profileId))?.patientNames?.some((n) => n.toLowerCase() === name) : false;
+    if (parsed.patientName && !mine && ((others.size && !others.has(name!)) || owner)) {
       const key = `llm:${doc.id}:patient`;
       proposal.items.unshift({
         key,
@@ -675,6 +696,15 @@ export class HealthService {
     if (doc.sampleKey) throw new ValidationError("У примера уже есть подготовленный разбор.");
     const proposal = await this.labFormProposal(doc, await this.d.repo.listVersions(profileId, documentId));
     if (!proposal) throw new ValidationError("Шаблон документа не распознан: его можно разобрать только с помощью модели.");
+    // An earlier parse of this document by a previous version of the template may have misread a row.
+    // Its facts that the new parse no longer finds, and that the user never checked or corrected, are withdrawn.
+    const found = new Set(proposal.items.map((i) => i.draft.dedupKey));
+    const at = this.now();
+    for (const f of await this.d.repo.listFacts(profileId)) {
+      const onlyHere = f.sources.length > 0 && f.sources.every((x) => x.documentId === documentId);
+      if (!onlyHere || f.extraction.method !== "parser" || f.verification !== "unverified" || f.type !== "lab_result" || found.has(f.dedupKey)) continue;
+      await this.d.repo.saveFact({ ...f, verification: "rejected", revisions: [...f.revisions, { at, action: "rejected", reason: "Не подтверждено повторным разбором по шаблону", before: null, after: null }] });
+    }
     await this.d.repo.saveProposal(profileId, proposal);
     const updated: SourceDocument = { ...doc, status: "review_pending", statusMessage: null };
     await this.d.repo.saveDocument(updated);

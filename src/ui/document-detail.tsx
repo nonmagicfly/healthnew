@@ -690,9 +690,12 @@ function canParseLocally(d: SourceDocument) {
 /** Moves a document that belongs to someone else (e.g. a child's form) to that person's profile. */
 function MoveDocument({ doc, otherPatient, patientName }: { doc: SourceDocument; otherPatient: boolean; patientName: string | null }) {
   const { base, profiles, profile, setProfileId, bump } = useProfile();
-  const targets = profiles.filter((p) => !p.isDemo && p.id !== profile?.id);
+  // Every existing profile is offered, the current one first («оставить здесь»); a new profile is the last option.
+  const own = profiles.filter((p) => !p.isDemo);
+  const targets = [...own.filter((p) => p.id === profile?.id), ...own.filter((p) => p.id !== profile?.id)];
   const suggested = patientName ? targets.find((p) => p.patientNames?.some((n) => n.toLowerCase() === patientName.toLowerCase())) : undefined;
-  const [target, setTarget] = useState(suggested?.id ?? targets[0]?.id ?? "");
+  const [target, setTarget] = useState(suggested?.id ?? targets.find((p) => p.id !== profile?.id)?.id ?? profile?.id ?? "");
+  const stays = target === profile?.id;
   const [newName, setNewName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -700,6 +703,12 @@ function MoveDocument({ doc, otherPatient, patientName }: { doc: SourceDocument;
     setBusy(true);
     setError(null);
     try {
+      if (stays) {
+        // The form is this person's own: the question is answered and the name is remembered for this profile.
+        await postJson(`${base}/documents/${doc.id}/claim`, {});
+        bump();
+        return;
+      }
       let to = target;
       if (!to) {
         const p = await postJson<{ id: string }>("/api/profiles", { name: newName });
@@ -727,7 +736,7 @@ function MoveDocument({ doc, otherPatient, patientName }: { doc: SourceDocument;
           <select id="move-target" value={target} onChange={(e) => setTarget(e.target.value)} className="mt-1 block rounded border border-slate-300 px-2 py-1">
             {targets.map((p) => (
               <option key={p.id} value={p.id}>
-                {p.name}
+                {p.id === profile?.id ? `${p.name} (оставить здесь)` : p.name}
               </option>
             ))}
             <option value="">+ Новый профиль…</option>
@@ -740,7 +749,7 @@ function MoveDocument({ doc, otherPatient, patientName }: { doc: SourceDocument;
           </label>
         )}
         <button type="button" onClick={move} disabled={busy || (!target && !newName.trim())} className="rounded bg-teal-700 px-4 py-1.5 text-white disabled:opacity-50">
-          {busy ? "Переношу…" : "Перенести"}
+          {busy ? "Сохраняю…" : stays ? "Это документ этого профиля" : "Перенести"}
         </button>
       </div>
       {error && <p role="alert" className="text-red-700">{error}</p>}
