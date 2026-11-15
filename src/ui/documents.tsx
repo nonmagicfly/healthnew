@@ -551,6 +551,9 @@ export function DocumentsView() {
     specialist: "",
     area: "",
   });
+  // Documents out of focus (a cold, a certificate) are kept but hidden unless asked for.
+  const [showOut, setShowOut] = useState(false);
+  const outCount = documents.filter((r) => r.focus?.status === "out").length;
   const specialists = useMemo(
     () =>
       [
@@ -565,7 +568,8 @@ export function DocumentsView() {
       ] as string[],
     [documents],
   );
-  const shown = documents.filter(({ document: d }) => {
+  const shown = documents.filter(({ document: d, focus }) => {
+    if (!showOut && focus?.status === "out") return false;
     if (f.kind && d.kind !== f.kind) return false;
     if (f.specialist && d.specialist !== f.specialist) return false;
     if (f.area && d.area !== f.area) return false;
@@ -664,6 +668,12 @@ export function DocumentsView() {
             </select>
           </label>
         </fieldset>
+        {outCount > 0 && (
+          <label className="mb-2 flex items-center gap-2 text-sm text-slate-700">
+            <input type="checkbox" checked={showOut} onChange={(e) => setShowOut(e.target.checked)} />
+            Показать документы вне фокуса ({outCount})
+          </label>
+        )}
         <ViewSwitch
           view={view}
           onChange={setView}

@@ -48,6 +48,9 @@ export const INDICATORS: IndicatorDef[] = [
   { code: "ft4", name: "Т4 свободный", group: "Гормоны и витамины", priority: false, aliases: ["т4 свободный", "свободный т4", "ft4"] },
   { code: "b12", name: "Витамин B12", group: "Гормоны и витамины", priority: false, aliases: ["витамин b12", "витамин в12", "b12", "в12", "цианокобаламин"] },
   { code: "folate", name: "Фолиевая кислота", group: "Гормоны и витамины", priority: false, aliases: ["фолиевая кислота", "фолаты"] },
+  { code: "psa", name: "ПСА общий", group: "Гормоны и витамины", priority: false, aliases: ["пса общий", "простатспецифический антиген общий", "простатический специфический антиген общий", "пса", "psa общий", "psa", "total psa"] },
+  { code: "psa_free", name: "ПСА свободный", group: "Гормоны и витамины", priority: false, aliases: ["пса свободный", "простатспецифический антиген свободный", "свободный пса", "psa свободный", "free psa"] },
+  { code: "testosterone", name: "Тестостерон", group: "Гормоны и витамины", priority: false, aliases: ["тестостерон общий", "тестостерон", "testosterone"] },
   { code: "vitd", name: "Витамин D", group: "Гормоны и витамины", priority: false, aliases: ["витамин d", "25-oh витамин d", "25-он витамин d", "25(oh)d", "витамин д"] },
   { code: "hbsag", name: "HBsAg", group: "Прочее", priority: false, aliases: ["hbsag"] },
 ];

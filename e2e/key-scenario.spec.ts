@@ -310,3 +310,37 @@ test("doctors page sums up visits by specialty and answers a question about sele
   await dialog.getByRole("button", { name: "Спросить", exact: true }).click();
   await expect(dialog.getByText("Вопрос и ответ сохранены в чате")).toBeVisible();
 });
+
+test("focus page keeps what matters and hides a cold from the documents list", async ({ page }) => {
+  await useProfile(page, "me");
+  await page.goto("/documents");
+  const cardio = [
+    "Клиника Тестовая",
+    "Дата: 12.05.2026",
+    "ОСМОТР КАРДИОЛОГА",
+    "Жалобы: на перебои в работе сердца.",
+    "Основное заболевание: (заключительный) Желудочковая экстрасистолия. (I49.3)",
+    "Назначена повторная явка на 20.06.2030",
+  ].join("\n");
+  const cold = ["Клиника Тестовая", "Дата: 14.05.2026", "ОСМОТР ТЕРАПЕВТА", "Жалобы: на насморк, кашель.", "Основное заболевание: (заключительный) ОРВИ. (J06.9)"].join("\n");
+  await page.getByLabel(/Файл \(PDF/).setInputFiles([
+    { name: "кардиолог.txt", mimeType: "text/plain", buffer: Buffer.from(cardio) },
+    { name: "простуда.txt", mimeType: "text/plain", buffer: Buffer.from(cold) },
+  ]);
+  await page.getByRole("button", { name: "Загрузить" }).click().catch(() => undefined);
+  await expect(page.getByText(/Добавлено в историю|загружен/i).first()).toBeVisible();
+
+  await page.goto("/focus");
+  const card = page.locator("section").filter({ hasText: "Сердце и сосуды" });
+  await expect(card.getByText(/Желудочковая экстрасистолия/)).toBeVisible();
+  await expect(card.getByText(/20\.06\.2030/)).toBeVisible();
+  // Other tests share this data directory, so only this test's cold note is checked by name.
+  await page.getByText(/Вне фокуса: \d+/).click();
+  await expect(page.getByRole("link", { name: "Осмотр терапевта" })).toBeVisible();
+
+  await page.goto("/documents");
+  await expect(page.getByText(/Показать документы вне фокуса/)).toBeVisible();
+  await expect(page.getByRole("link", { name: "Осмотр терапевта" })).toHaveCount(0);
+  await page.getByText(/Показать документы вне фокуса/).click();
+  await expect(page.getByRole("link", { name: "Осмотр терапевта" }).first()).toBeVisible();
+});

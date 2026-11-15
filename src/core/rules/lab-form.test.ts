@@ -31,7 +31,60 @@ const FORM = (surname: string, date: string) => [
   ].join("\n"),
 ];
 
+// Invented form in the other text layer of the same layout: columns separated by spaces, result first.
+const SPACED = [
+  [
+    "Клинический анализ крови",
+    "№ направления: 10000002 Дата: 15.02.2024 Фамилия: ТЕСТОВ",
+    "ЛПУ: Карта: К-0000001 Имя: Иван",
+    "Отделение: 01. Терапевтическое отделение Отчество: Петрович",
+    "Врач: Докторова А.Б. Дата рождения: 01.01.1990",
+    "Наименование исследования Результат Ед. изм. Нормальные значения",
+    "Исследование - (1000001) Клинический анализ крови (общий анализ + лейкоцитарная формула+СОЭ)",
+    "Лейкоцитарная формула (микроскопия), биоматериал - ЦЕЛЬНАЯ КРОВЬ (ЭДТА)",
+    "Базофилы 1 % 0-1",
+    "Общий анализ крови, биоматериал - ЦЕЛЬНАЯ КРОВЬ (ЭДТА)",
+    "Базофилы абс. к-во 0.1 10^9/л 0-0,2",
+    "Гемоглобин 150 г/л 132-173",
+    "Распределение тромбоцитов по",
+    "объему 14 % 15 - 17",
+    "Средняя концентрация Hb в",
+    "эритроците 330 г/л 320-370",
+    "Клиника на Тестовой",
+  ].join("\n"),
+  [
+    "Эритроциты 4.90 10^12/л 4,3-5,7",
+    "СОЭ (автоматизированный метод), биоматериал - ЦЕЛЬНАЯ КРОВЬ (ЭДТА)",
+    "СОЭ (автоматизированный метод) 3 мм/ч 1 - 15",
+    "АЛТ (Аланиновая трансаминаза) 21.5 Ед/л < 41.0",
+    "Холестерин общий 5.10 ммоль/л",
+    "< 5.20 - желательные",
+    "значения; 5.20 - 6.20 -",
+    "пограничные значения; >",
+    "6.20 - высокие значения",
+    "15.02.2024 Врач КДЛ: Лаборантова В.Г.",
+  ].join("\n"),
+];
+
 describe("lab form parser", () => {
+  it("reads the result-first text layer without mixing up result and reference", () => {
+    const r = parseLabForm(SPACED)!;
+    expect(r.patientName).toBe("ТЕСТОВ Иван Петрович");
+    expect(r.documentDate).toMatchObject({ date: "2024-02-15" });
+    const rows = r.items.map((i) => [i.lab!.name, i.lab!.value, i.lab!.unit, i.lab!.reference]);
+    expect(rows).toEqual([
+      ["Базофилы", "1", "%", "0-1"],
+      ["Базофилы абс. к-во", "0.1", "10^9/л", "0-0,2"],
+      ["Гемоглобин", "150", "г/л", "132-173"],
+      ["Распределение тромбоцитов по объему", "14", "%", "15-17"],
+      ["Средняя концентрация Hb в эритроците", "330", "г/л", "320-370"],
+      ["Эритроциты", "4.90", "10^12/л", "4,3-5,7"],
+      ["СОЭ (автоматизированный метод)", "3", "мм/ч", "1-15"],
+      ["АЛТ (Аланиновая трансаминаза)", "21.5", "Ед/л", "<41.0"],
+      ["Холестерин общий", "5.10", "ммоль/л", null],
+    ]);
+  });
+
   it("splits glued reference and result by the decimals of the lower bound", () => {
     expect(splitReferenceAndValue("4.50-11.006.09")).toEqual({ reference: "4.50-11.00", value: "6.09", flag: null });
     expect(splitReferenceAndValue("132-173155")).toEqual({ reference: "132-173", value: "155", flag: null });
@@ -79,6 +132,43 @@ describe("lab form parser", () => {
     const other = await upload("бланк-2.txt", FORM("ДРУГОВА", "02.03.2026"));
     const p2 = (await service.getDocument("me", other.document.id)).proposal!;
     expect(p2.items[0]).toMatchObject({ group: "clarify", draft: { label: expect.stringContaining("ДРУГОВА") } });
+  });
+
+  it("withdraws an unchecked row that a corrected template no longer reads that way", async () => {
+    const { service, repo } = await createTestService();
+    const { document } = await service.upload("me", { fileName: "оак.txt", mime: "text/plain", bytes: new TextEncoder().encode(SPACED.join("\n")), kind: "lab_report" });
+    await service.applyProposal("me", document.id, { acceptedStateChanges: [], postponedClarifications: [] });
+    const esr = (await repo.listFacts("me")).find((f) => f.label.startsWith("СОЭ"))!;
+    // What an older template made of the row: a misread value under another key.
+    await repo.saveFact({ ...esr, id: "fact_old", label: "СОЭ (автоматизированный метод) 3 5 мм/ч", dedupKey: "old-misread" });
+    await service.parseLocally("me", document.id);
+    const facts = await repo.listFacts("me");
+    expect(facts.find((f) => f.id === "fact_old")!.verification).toBe("rejected");
+    expect(facts.find((f) => f.id === esr.id)!.verification).toBe("unverified");
+  });
+
+  it("takes no patient name rather than other header fields", () => {
+    const pages = FORM("ТЕСТОВ", "01.03.2026");
+    const shuffled = [pages[0].replace("ТЕСТОВФамилия:", "ЛПУ: Карта: 0000002 Отделение: 05. ОтделениеФамилия:"), pages[1]];
+    expect(parseLabForm(shuffled)!.patientName).toBeNull();
+    expect(parseLabForm([pages[0].replace("ТЕСТОВФамилия:", "Фамилия: ТЕСТОВ"), pages[1]])!.patientName).toBe("ТЕСТОВ Иван Петрович");
+    expect(parseLabForm(pages)!.patientName).toBe("ТЕСТОВ Иван Петрович");
+  });
+
+  it("keeps a form the user says is theirs and does not ask about that name again", async () => {
+    const { service, repo } = await createTestService();
+    const upload = (name: string, text: string[]) =>
+      service.upload("me", { fileName: name, mime: "text/plain", bytes: new TextEncoder().encode(text.join("\n")), kind: "lab_report" });
+    const first = await upload("бланк-1.txt", FORM("ТЕСТОВ", "01.03.2026"));
+    await service.applyProposal("me", first.document.id, { acceptedStateChanges: [], postponedClarifications: [] });
+    const second = await upload("бланк-2.txt", FORM("ТЕСТОВА", "02.03.2026"));
+    expect((await service.getDocument("me", second.document.id)).proposal!.items[0].group).toBe("clarify");
+
+    await service.claimDocument("me", second.document.id);
+    expect((await service.getDocument("me", second.document.id)).proposal!.items.some((i) => i.group === "clarify")).toBe(false);
+    expect((await repo.getProfile("me"))!.patientNames).toContain("ТЕСТОВА Иван Петрович");
+    const third = await upload("бланк-3.txt", FORM("ТЕСТОВА", "03.03.2026"));
+    expect((await service.getDocument("me", third.document.id)).proposal!.items.some((i) => i.group === "clarify")).toBe(false);
   });
 
   it("fills missing dates when a form is uploaded again, and answers which values are out of range", async () => {

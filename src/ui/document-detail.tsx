@@ -6,6 +6,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "rea
 import { ensureFileChosen, FilePicker } from "./file-picker";
 import type { ContentVersion, Encounter, Fact, Proposal, ProposalItem, SourceDocument } from "@/core/model";
 import { MEDICATION_STATUS_LABEL } from "@/core/rules/facts";
+import type { DocumentFocus } from "@/core/rules/focus";
 import { formatDateValue } from "@/core/rules/dates";
 import { SPEAKER_LABEL } from "@/core/rules/transcript";
 import { indicatorOf, qualitativeIndicatorOf } from "@/core/indicators";
@@ -22,6 +23,7 @@ interface Detail {
   proposal: Proposal | null;
   encounter: Encounter | null;
   relatedDocuments: SourceDocument[];
+  focus: DocumentFocus & { titles: string[] };
 }
 
 const METHOD_LABEL: Record<ContentVersion["method"], { text: string; demo: boolean }> = {
@@ -418,6 +420,7 @@ export function DocumentDetailView() {
           {d.isSynthetic && <DemoBadge>Синтетический документ</DemoBadge>}
         </div>
         <DocumentLabels doc={d} onSaved={bump} />
+        <FocusLine doc={d} focus={detail.data.focus} onSaved={bump} />
         {search.get("duplicate") && (
           <p role="status" className="mt-2 rounded bg-sky-50 p-2 text-sm text-sky-900">
             Этот документ уже был загружен (тот же файл или копия с тем же текстом). Открыт существующий документ, дубль не создан.
@@ -560,6 +563,50 @@ function ModelExtract({ doc, onDone }: { doc: SourceDocument; onDone: () => void
   );
 }
 
+/** Whether the document is in focus, and the user's own choice that overrides the rules. */
+function FocusLine({ doc, focus, onSaved }: { doc: SourceDocument; focus: Detail["focus"]; onSaved: () => void }) {
+  const { base } = useProfile();
+  const [error, setError] = useState<string | null>(null);
+  const set = async (value: "in" | "out" | null) => {
+    setError(null);
+    try {
+      await api(`${base}/documents/${doc.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ focus: value }) });
+      onSaved();
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  const link = "text-xs text-teal-800 underline";
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
+      {focus.status === "out" ? (
+        <Badge tone="slate">Вне фокуса: не попадает в чат</Badge>
+      ) : focus.status === "unknown" ? (
+        <Badge tone="slate">Фокус определится после разбора</Badge>
+      ) : (
+        <Badge tone="teal">В фокусе{focus.titles.length ? `: ${focus.titles.join(", ")}` : ""}</Badge>
+      )}
+      {focus.manual && <span className="text-xs text-slate-500">(отмечено вами)</span>}
+      {focus.status !== "out" && (
+        <button type="button" onClick={() => set("out")} className={link}>
+          Убрать из фокуса
+        </button>
+      )}
+      {focus.status !== "in" && (
+        <button type="button" onClick={() => set("in")} className={link}>
+          Вернуть в фокус
+        </button>
+      )}
+      {focus.manual && (
+        <button type="button" onClick={() => set(null)} className={link}>
+          Решать автоматически
+        </button>
+      )}
+      {error && <span role="alert" className="text-red-700">{error}</span>}
+    </div>
+  );
+}
+
 /** Shows the document date with an inline editor; facts from this document get the new date too. */
 function DocumentDate({ doc, onSaved }: { doc: SourceDocument; onSaved: () => void }) {
   const { base } = useProfile();
@@ -690,9 +737,12 @@ function canParseLocally(d: SourceDocument) {
 /** Moves a document that belongs to someone else (e.g. a child's form) to that person's profile. */
 function MoveDocument({ doc, otherPatient, patientName }: { doc: SourceDocument; otherPatient: boolean; patientName: string | null }) {
   const { base, profiles, profile, setProfileId, bump } = useProfile();
-  const targets = profiles.filter((p) => !p.isDemo && p.id !== profile?.id);
+  // Every existing profile is offered, the current one first («оставить здесь»); a new profile is the last option.
+  const own = profiles.filter((p) => !p.isDemo);
+  const targets = [...own.filter((p) => p.id === profile?.id), ...own.filter((p) => p.id !== profile?.id)];
   const suggested = patientName ? targets.find((p) => p.patientNames?.some((n) => n.toLowerCase() === patientName.toLowerCase())) : undefined;
-  const [target, setTarget] = useState(suggested?.id ?? targets[0]?.id ?? "");
+  const [target, setTarget] = useState(suggested?.id ?? targets.find((p) => p.id !== profile?.id)?.id ?? profile?.id ?? "");
+  const stays = target === profile?.id;
   const [newName, setNewName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -700,6 +750,12 @@ function MoveDocument({ doc, otherPatient, patientName }: { doc: SourceDocument;
     setBusy(true);
     setError(null);
     try {
+      if (stays) {
+        // The form is this person's own: the question is answered and the name is remembered for this profile.
+        await postJson(`${base}/documents/${doc.id}/claim`, {});
+        bump();
+        return;
+      }
       let to = target;
       if (!to) {
         const p = await postJson<{ id: string }>("/api/profiles", { name: newName });
@@ -727,7 +783,7 @@ function MoveDocument({ doc, otherPatient, patientName }: { doc: SourceDocument;
           <select id="move-target" value={target} onChange={(e) => setTarget(e.target.value)} className="mt-1 block rounded border border-slate-300 px-2 py-1">
             {targets.map((p) => (
               <option key={p.id} value={p.id}>
-                {p.name}
+                {p.id === profile?.id ? `${p.name} (оставить здесь)` : p.name}
               </option>
             ))}
             <option value="">+ Новый профиль…</option>
@@ -740,7 +796,7 @@ function MoveDocument({ doc, otherPatient, patientName }: { doc: SourceDocument;
           </label>
         )}
         <button type="button" onClick={move} disabled={busy || (!target && !newName.trim())} className="rounded bg-teal-700 px-4 py-1.5 text-white disabled:opacity-50">
-          {busy ? "Переношу…" : "Перенести"}
+          {busy ? "Сохраняю…" : stays ? "Это документ этого профиля" : "Перенести"}
         </button>
       </div>
       {error && <p role="alert" className="text-red-700">{error}</p>}

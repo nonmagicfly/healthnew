@@ -167,7 +167,8 @@ export function parseConsultation(pages: string[]): ConsultationResult | null {
   }
 
   for (const name of DIAGNOSIS_SECTIONS) {
-    const body = parts.get(name);
+    // A section ends where the next visit or the signature begins, even without a heading of its own.
+    const body = parts.get(name)?.split(/\n\s*(?:Назначена|Повторная явка|Врач[\s-])/)[0];
     if (!body) continue;
     const codes = [...body.matchAll(ICD)].map((m) => m[1]);
     const clean = body.replace(ICD, "").replace(/^\s*\((?:заключительный|предварительный|основной)\)\s*/i, "");
